@@ -1,0 +1,37 @@
+# macOS metadata
+.DS_Store
+
+# Python caches and notebook checkpoints
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Logs and Slurm output
+*.log
+*.out
+*.err
+slurm-*.out
+jobs/logs/
+outputs/logs/
+
+# Large Pathfinder data/results stay off Git
+data/
+outputs/
+*.nc
+*.h5
+*.hdf5
+*.tif
+*.tiff
+*.ckpt
+
+# Local scratch databases/temp state
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# Local backup/editor artifacts
+*.bak
+*~
