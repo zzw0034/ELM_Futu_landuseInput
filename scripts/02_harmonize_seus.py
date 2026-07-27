@@ -68,7 +68,9 @@ def group_sum(p):
 # ============================================================================
 # Stage B: LUH2 wood-harvest downscaling to the target grid, reusing s4_2's
 # method (area-conserving, forest-weighted). Weight = our harmonized future tree
-# cover; harvest source = the matching-scenario LUH2 v2f transitions in /luh.
+# cover x the annual harmonized natveg; harvest source = the matching-scenario LUH2
+# v2f transitions in /luh. Annual (not static) natveg is used for both the weight
+# and the LUT denominator, matching s4_2 -- see downscale_harvest's docstring.
 # Helper functions (_safe_float32, _fraction_if_percent, _build_hr_to_coarse_index,
 # _distribute_conservatively) are copied verbatim from s4_2_donwscale_LUH2harvest.py.
 # ============================================================================
@@ -134,14 +136,19 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
     """Downscale LUH2 harvest to the target grid, weighted by our harmonized forest.
 
     tree_comp_pct : (nout,ny,nx)  tree share of natveg [%] per out year (harmonized)
-    natveg_pct    : (ny,nx)       target static natveg [%]  (option A; the weight's natveg)
+    natveg_pct    : (nout,ny,nx)  ANNUAL harmonized natveg [%] per out year, matching
+                                  s4_2's historical convention (dynamic natveg in both
+                                  the weight and the LUT denominator). NOTE: this is
+                                  deliberately NOT the static PCT_NATVEG written to the
+                                  output file -- see build_landuse_timeseries.
     Returns dict out_name -> (nout,ny,nx) float32 [LUT units, fraction of veg unit],
     plus a list of per-year area-conservation ratios (placed / allocatable LUH2 area).
     """
-    ny, nx = natveg_pct.shape
     nout = len(out_years)
+    assert natveg_pct.shape[0] == nout, "natveg_pct must be annual (nout,ny,nx)"
+    ny, nx = natveg_pct.shape[1:]
     area_hr = cell_area_km2(latc, lonc)
-    veg_frac = (natveg_pct / 100.0).astype(np.float64)                      # 0..1, static
+    veg_frac = (natveg_pct / 100.0).astype(np.float64)                      # (nout,ny,nx) 0..1
     luh = xr.open_dataset(LUH_DIR / LUH_FILE[scenario], decode_times=False)
     clat = luh.lat.values
     clon = luh.lon.values
@@ -158,7 +165,8 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
     for k, Y in enumerate(out_years):
         cal = int(Y) - 1                                                   # k=-1 label convention
         hidx = min(cal, LUH_SSP_LAST) - LUH_SSP_YEAR0
-        w = ((tree_comp_pct[k] / 100.0) * veg_frac).astype(np.float32)     # forest cover weight
+        vf = veg_frac[k]                                                   # this year's natveg
+        w = ((tree_comp_pct[k] / 100.0) * vf).astype(np.float32)           # forest cover weight
         w = np.where(w > 0, w, 0.0).astype(np.float32)
         sum_w = np.bincount(id_flat, weights=np.where(inside.reshape(-1), w.reshape(-1), 0.0),
                             minlength=ncoarse)
@@ -171,8 +179,8 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
             hr, ca_sums, _, _, _, _ = _distribute_conservatively(
                 coarse, w, area_hr, coarse_id, inside, ncoarse)
             with np.errstate(divide="ignore", invalid="ignore"):
-                lut = np.divide(hr, veg_frac, out=np.zeros_like(hr, dtype=np.float32),
-                                where=veg_frac > 0.0)
+                lut = np.divide(hr, vf, out=np.zeros_like(hr, dtype=np.float32),
+                                where=vf > 0.0)
             lut_grids[out_name] = lut
             cflat = coarse.reshape(-1).astype(np.float64)
             luh_area += float((cflat * area_coarse)[alloc].sum())
@@ -290,6 +298,11 @@ def build_landuse_timeseries(args):
     natveg_zero = natveg_a == 0.0
     nyr = p_harm.shape[0]
     comp = np.zeros((nyr, NPFT, ny, nx), dtype=np.float32)
+    # Annual harmonized natveg = Sum_j p(j), i.e. the natveg implied by the marched
+    # p(j) field (anchored at the target's 2023 natveg, carrying the Chen trend).
+    # Same quantity the standalone SEUS mode writes as PCT_NATVEG. Used by stage B
+    # only; the output file still carries the target's static column (see stage C).
+    natveg_dyn = np.zeros((nyr, ny, nx), dtype=np.float64)
     for i in range(nyr):
         s = p_harm[i].sum(axis=0)
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -298,18 +311,37 @@ def build_landuse_timeseries(args):
         ci[:, fill] = 0.0
         ci[0, fill] = 100.0                                                      # PFT0 (bare) = 100
         comp[i] = ci.astype(np.float32)
+        nvi = np.clip(s, 0.0, 100.0)
+        nvi[fill] = 0.0
+        natveg_dyn[i] = nvi
 
     out_years = np.arange(ANCHOR + 1, END + 1)                                   # 2024..2100
     pft_out = comp[1:]                                                           # drop 2023 anchor slice
+    natveg_out = natveg_dyn[1:]                                                  # (nout,ny,nx)
 
     # ---- Stage B: harvest downscale (LUH2 scenario -> target grid) ----
+    # Dynamic natveg here (weight + LUT denominator), matching s4_2's historical
+    # convention. The file's PCT_NATVEG stays static, so ELM's recovered harvest
+    # area carries a factor natveg_static/natveg_dyn; reported below.
     tree_comp = pft_out[:, TREE_PFT_IDXS].sum(axis=1)                            # (nout,ny,nx) tree % of natveg
-    harv, cons = downscale_harvest(args.scenario, latc, lonc, tree_comp, natveg_a, out_years)
+    harv, cons = downscale_harvest(args.scenario, latc, lonc, tree_comp, natveg_out, out_years)
     grazing_out = np.repeat(grazing23[None], len(out_years), axis=0).astype(np.float32)  # persist 2023
     print(f"  harvest area-conservation (placed/allocatable LUH2): "
           f"min {min(cons):.4f} mean {float(np.mean(cons)):.4f} max {max(cons):.4f}")
     for v in ("HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3"):
         print(f"    {v}: max {harv[v].max():.4g} mean {harv[v].mean():.4g}")
+    # How far the file's static PCT_NATVEG sits from the denominator actually used.
+    # ELM recovers harvested area = HARVEST * PCT_NATVEG_static, so this ratio is
+    # the multiplicative offset vs the LUH2 area that was downscaled.
+    _m = (natveg_out > 0) & (natveg_a[None] > 0)
+    if _m.any():
+        _r = np.broadcast_to(natveg_a[None], natveg_out.shape)[_m] / natveg_out[_m]
+        _p = np.percentile(_r, [5, 50, 95])
+        print(f"  natveg_static/natveg_dynamic (ELM area offset): "
+              f"p05 {_p[0]:.4f} p50 {_p[1]:.4f} p95 {_p[2]:.4f} max {_r.max():.4f}")
+        _wa = np.repeat(cell_area_km2(latc, lonc)[None], len(out_years), axis=0)[_m]
+        print(f"  area-weighted mean offset: "
+              f"{float((_r * _wa).sum() / _wa.sum()):.4f} (1.0 = no offset)")
 
     # ---- validation ----
     print(f"[timeseries stageA] scenario {args.scenario}  grid {ny}x{nx}")
@@ -360,7 +392,13 @@ def build_landuse_timeseries(args):
         harmonized_note=(f"future 2024-2100: NLCD-2023 state (from {Path(tgt).name}) + "
                          f"Chen {args.scenario} trend (harmonize_seus.py §13); harvest downscaled "
                          f"from LUH2 {LUH_FILE[args.scenario]} (forest-weighted, area-conserving); "
-                         f"GRAZING persisted from target 2023; natveg static, natveg=0 -> 100% bare"))
+                         f"GRAZING persisted from target 2023; natveg=0 -> 100% bare"),
+        harvest_natveg_convention=(
+            "HARVEST_* were downscaled and converted to LUT units using the ANNUAL "
+            "harmonized natveg (sum_j p(j)), matching s4_2's historical convention. "
+            "PCT_NATVEG in this file is the target's STATIC column and is NOT the "
+            "denominator used; ELM's recovered harvest area therefore carries a factor "
+            "natveg_static/natveg_annual."))
 
     # grid hard-check vs target
     gok = (np.array_equal(out_ds["LATIXY"].values, tds["LATIXY"].values)
