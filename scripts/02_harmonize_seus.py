@@ -441,6 +441,24 @@ def main():
     if args.build_timeseries:
         return build_landuse_timeseries(args)
     ch_path = OUTDIR / "processed" / CHEN[args.scenario]
+    missing = [p for p in (NL, ch_path) if not Path(p).exists()]
+    if missing:
+        print("=" * 78)
+        print("standalone mode is NOT the maintained path and its inputs are absent.")
+        print("")
+        for p in missing:
+            print(f"  missing: {p}")
+        print("")
+        print("ELM forcing is produced by the --build-timeseries mode, which reads a")
+        print("target-grid Chen file from outputs/interim/ and is unaffected by this.")
+        print("Standalone additionally cannot reach the documented 24.0N southern bound:")
+        print("the NLCD source grid starts at 25.0N, so its SEUS crop is 300 rows, 24")
+        print("rows short of the 324-row target grid. Use --build-timeseries instead.")
+        print("")
+        print("To run standalone anyway, regenerate the CONUS Chen files with")
+        print("01_chen2022_to_elm_landuse.py and place them in outputs/processed/.")
+        print("=" * 78)
+        return 1
     print(f"scenario {args.scenario}  <-  {ch_path.name}")
 
     nl = xr.open_dataset(NL); ch = xr.open_dataset(ch_path)
@@ -456,6 +474,16 @@ def main():
     area = cell_area_km2(lat_s, lon_s)
     print(f"SEUS grid {ny} x {nx}  lat {lat_s[0]:.2f}..{lat_s[-1]:.2f} "
           f"lon {lon_s[0]:.2f}..{lon_s[-1]:.2f}")
+    # The NLCD source grid starts at 25.0N, so the crop cannot reach SEUS lat0=24.0.
+    # Say so loudly rather than silently shipping a domain ~1 deg narrower than the
+    # documented bbox (and 24 rows short of the --build-timeseries target grid).
+    dlat = float(np.mean(np.diff(lat_s)))
+    if lat_s[0] - SEUS["lat0"] > 0.5 * dlat:
+        print(f"  WARNING: southern bound is {lat_s[0]:.4f}N, not the documented "
+              f"{SEUS['lat0']:.1f}N -- short by {lat_s[0] - SEUS['lat0']:.4f} deg "
+              f"({round((lat_s[0] - SEUS['lat0']) / dlat)} rows). The input grid "
+              f"({Path(NL).name}) begins at {lat[0]:.4f}N; this is an input-extent "
+              f"limit, not a cropping bug. Use --build-timeseries for ELM forcing.")
 
     nl_yrs = nl.time.dt.year.values
     ch_yrs = ch.time.values.astype(int)
