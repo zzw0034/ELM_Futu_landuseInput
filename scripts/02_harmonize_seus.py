@@ -29,6 +29,7 @@ OUTDIR = Path("/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outpu
 CHEN = {
     "SSP1_RCP19": "chen2022_landuse_CONUS_SSP1_RCP19_2015-2100_1_24deg.nc",
     "SSP2_RCP45": "chen2022_landuse_CONUS_SSP2_RCP45_2015-2100_1_24deg.nc",
+    "SSP3_RCP70": "chen2022_landuse_CONUS_SSP3_RCP70_2015-2100_1_24deg.nc",
     "SSP4_RCP60": "chen2022_landuse_CONUS_SSP4_RCP60_2015-2100_1_24deg.nc",
     "SSP5_RCP85": "chen2022_landuse_CONUS_SSP5_RCP85_2015-2100_1_24deg.nc",
 }
@@ -78,6 +79,7 @@ def group_sum(p):
 LUH_DIR = Path("/projects/hpcl-cli185/proj-shared/zw5/luh")
 LUH_FILE = {"SSP1_RCP19": "ssp1rcp19_transitions.nc",
             "SSP2_RCP45": "ssp2rcp45_transitions.nc",
+            "SSP3_RCP70": "ssp3rcp70_transitions.nc",
             "SSP4_RCP60": "ssp4rcp60_transitions.nc",
             "SSP5_RCP85": "ssp5rcp85_transitions.nc"}
 HARVEST_VAR_MAP = {"primf_harv": "HARVEST_VH1", "primn_harv": "HARVEST_VH2",
