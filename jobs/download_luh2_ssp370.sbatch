@@ -14,21 +14,33 @@
 # Fetch the LUH2 v2f SSP3-7.0 transitions file, to pair with the Chen2022
 # SSP3_RCP70 land-use trend in 02_harmonize_seus.py (Stage B wood harvest).
 #
-# Must run on a compute node: luh.umd.edu:443 is refused from the login nodes.
-# The server's certificate is not trusted by the system CA bundle, so
-# --no-check-certificate is required (same as the ssp119/245/460/585 pulls).
+# Must run on a compute node: neither source is reachable from the login nodes.
 #
-# The per-IAM subdirectory under LUH2_v2f/ is NOT uniform across scenarios
-# (observed: IMAGE_SSP1_RCP19/, MESSAGE/, GCAM60/, MAGPIE/), so the correct
-# path for AIM/ssp370 is discovered rather than assumed.
+# Primary source is the ESGF replica at DKRZ, not luh.umd.edu: the UMD host
+# (gsweb28.umd.edu) has been refusing TCP on both 80 and 443 since at least
+# 2026-07-28, while ORNL egress is otherwise healthy. The DKRZ copy is the same
+# product -- source_id UofMD-landState-AIM-ssp370-2-1-f ("-2-1-f" = LUH2 v2f),
+# version v20171005, identical filename to the UMD one, and the same vintage as
+# the ssp460/ssp585 files already on disk (server mtime 2017-10-05). It needs no
+# ESGF credentials: the THREDDS fileServer URL returns 200 directly, so none of
+# the OpenID/MyProxy machinery in the generated ESGF wget script is required.
+#
+# URL and checksum taken from the ESGF wget script generated at
+# esgf-data.dkrz.de on 2026-07-29 for dataset
+#   input4MIPs.CMIP6.ScenarioMIP.UofMD.UofMD-landState-AIM-ssp370-2-1-f
+#     .land.yr.multiple-transitions.gn.v20171005
 
 set -uo pipefail
 
 LUH_DIR=/projects/hpcl-cli185/proj-shared/zw5/luh
-BASE=https://luh.umd.edu/LUH2/LUH2_v2f
-FNAME=multiple-transitions_input4MIPs_landState_ScenarioMIP_UofMD-AIM-ssp370-2-1-f_gn_2015-2100.nc
 DEST="$LUH_DIR/ssp3rcp70_transitions.nc"
 
+FNAME=multiple-transitions_input4MIPs_landState_ScenarioMIP_UofMD-AIM-ssp370-2-1-f_gn_2015-2100.nc
+DKRZ="https://esgf1.dkrz.de/thredds/fileServer/input4mips/input4MIPs/CMIP6/ScenarioMIP/UofMD/UofMD-landState-AIM-ssp370-2-1-f/land/yr/multiple-transitions/gn/v20171005/$FNAME"
+SHA256_EXPECT=159cadf427a4944751d1c0ceb0a5aed965ce9af87e150a88fbe151560bb4d887
+SIZE_EXPECT=1430100552
+
+UMD_BASE=https://luh.umd.edu/LUH2/LUH2_v2f
 WGET=(wget --no-check-certificate --tries=3 --timeout=60)
 CURL=(curl -sk --max-time 60)
 
@@ -39,64 +51,50 @@ if [ -s "$DEST" ]; then
     exit 0
 fi
 
-# ---- 1. locate the file -----------------------------------------------------
+# ---- 1. pick a source -------------------------------------------------------
 URL=""
-for sub in AIM AIM_SSP3_RCP70 AIM370 AIM70 AIM_SSP3 AIM-ssp370; do
-    cand="$BASE/$sub/$FNAME"
-    code=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -r 0-0 "$cand")
-    echo "probe $sub -> HTTP $code"
-    if [ "$code" = "200" ] || [ "$code" = "206" ]; then
-        URL="$cand"
-        break
-    fi
-done
-
-# Fallback: parse the v2f index for any ssp370 transitions link.
-if [ -z "$URL" ]; then
-    echo "No candidate subdirectory matched; parsing $BASE/ index ..."
-    hit=$("${CURL[@]}" "$BASE/" \
-          | grep -oE 'href="[^"]*ssp370[^"]*transitions[^"]*\.nc"' \
-          | head -1 | sed 's/^href="//; s/"$//')
-    if [ -n "$hit" ]; then
-        case "$hit" in
-            http*) URL="$hit" ;;
-            /*)    URL="https://luh.umd.edu$hit" ;;
-            *)     URL="$BASE/$hit" ;;
-        esac
-        echo "index gave: $URL"
-    fi
+code=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -L -r 0-0 "$DKRZ")
+echo "DKRZ (ESGF replica) -> HTTP $code"
+if [ "$code" = "200" ] || [ "$code" = "206" ]; then
+    URL="$DKRZ"
+else
+    echo "DKRZ unavailable; falling back to luh.umd.edu ..."
+    for sub in AIM AIM_SSP3_RCP70 AIM370 AIM70 AIM_SSP3 AIM-ssp370; do
+        cand="$UMD_BASE/$sub/$FNAME"
+        c=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -L -r 0-0 "$cand")
+        echo "  probe $sub -> HTTP $c"
+        if [ "$c" = "200" ] || [ "$c" = "206" ]; then URL="$cand"; break; fi
+    done
 fi
 
 if [ -z "$URL" ]; then
-    echo "FATAL: could not locate the ssp370 transitions file under $BASE/."
-    echo "       Open https://luh.umd.edu/data.shtml and read the LUH2 v2f"
-    echo "       scenario table for the AIM/SSP3-7.0 path, then set URL by hand."
+    echo "FATAL: no source reachable for $FNAME."
+    echo "       DKRZ:  $DKRZ"
+    echo "       UMD :  $UMD_BASE/<AIM subdir>/$FNAME"
     exit 1
 fi
 
 echo "Downloading: $URL"
 
 # ---- 2. download ------------------------------------------------------------
-"${WGET[@]}" -c -O "$DEST.part" "$URL" || {
-    echo "FATAL: wget failed for $URL"
-    exit 1
-}
+"${WGET[@]}" -c -O "$DEST.part" "$URL" || { echo "FATAL: wget failed"; exit 1; }
 
-# ---- 3. sanity-check before publishing the final name -----------------------
+# ---- 3. verify before publishing the final name -----------------------------
 sz=$(stat -c %s "$DEST.part")
-if [ "$sz" -lt 500000000 ]; then
-    echo "FATAL: $DEST.part is only $sz bytes; the sibling scenario files are 1.3-1.6 GB."
-    echo "       Left in place as .part for inspection."
+echo "size: $sz (expected $SIZE_EXPECT)"
+if [ "$sz" != "$SIZE_EXPECT" ]; then
+    echo "FATAL: size mismatch. Left as .part for inspection."
     exit 1
 fi
 
-magic=$(head -c 4 "$DEST.part" | tr -d '\0')
-case "$magic" in
-    CDF*|*HDF*) : ;;
-    *) echo "FATAL: $DEST.part is not netCDF/HDF5 (magic='$magic'); probably an error page."
-       exit 1 ;;
-esac
+echo -n "sha256: "
+sha=$(sha256sum "$DEST.part" | awk '{print $1}')
+echo "$sha"
+if [ "$sha" != "$SHA256_EXPECT" ]; then
+    echo "FATAL: checksum mismatch (expected $SHA256_EXPECT). Left as .part."
+    exit 1
+fi
 
 mv "$DEST.part" "$DEST"
-echo "OK: $DEST ($sz bytes)"
+echo "OK: $DEST ($sz bytes, sha256 verified)"
 ls -lh "$DEST"
