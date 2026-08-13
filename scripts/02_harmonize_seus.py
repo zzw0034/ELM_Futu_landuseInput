@@ -12,6 +12,7 @@ Implements HARMONIZATION_SEUS_PILOT.md (REFERENCE.md §13):
 
 Only PCT_NATVEG and PCT_NAT_PFT are produced. Region = SEUS bbox.
 """
+
 from __future__ import annotations
 import argparse
 from pathlib import Path
@@ -22,8 +23,10 @@ import xarray as xr
 sys.path.insert(0, "/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/src")
 from elm_landuse.chen_classes import ELM_PFT_NAMES, NPFT  # noqa: E402
 
-NL = Path("/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/"
-          "s4_LUToutput_pft/scr_out/elmpft_from_nlcd_frac_pred_1850-2023_1_24deg.nc")
+NL = Path(
+    "/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/"
+    "s4_LUToutput_pft/scr_out/elmpft_from_nlcd_frac_pred_1850-2023_1_24deg.nc"
+)
 OUTDIR = Path("/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs")
 # Chen scenario -> processed file (the 4 available SSPs)
 CHEN = {
@@ -41,8 +44,13 @@ END = 2100
 # Chen class maps to it), so it belongs to no functional group here. It is parked
 # in group 0 by GRP_OF_PFT below (harmless: its p(j)=0) and force-zeroed on output
 # (FORCE_ZERO). Removing it from Crop does not change any number, only bookkeeping.
-GROUPS = {"Bare": [0], "Tree": [1, 2, 3, 4, 5, 6, 7, 8], "Shrub": [9, 10, 11],
-          "Grass": [12, 13, 14], "Crop": [15]}
+GROUPS = {
+    "Bare": [0],
+    "Tree": [1, 2, 3, 4, 5, 6, 7, 8],
+    "Shrub": [9, 10, 11],
+    "Grass": [12, 13, 14],
+    "Crop": [15],
+}
 GN = list(GROUPS)
 NG = len(GN)
 # length-NPFT map; PFTs not assigned to any group (e.g. 16) default to group 0.
@@ -50,13 +58,23 @@ GRP_OF_PFT = np.zeros(NPFT, dtype=int)
 for _gi, _g in enumerate(GN):
     for _j in GROUPS[_g]:
         GRP_OF_PFT[_j] = _gi
-FORCE_ZERO = [2, 3, 6, 8, 11, 12, 16]   # boreal/arctic/tropical + irrigated_crop: 0 in SEUS (§13.8)
+FORCE_ZERO = [
+    2,
+    3,
+    6,
+    8,
+    11,
+    12,
+    16,
+]  # boreal/arctic/tropical + irrigated_crop: 0 in SEUS (§13.8)
 R_EARTH = 6371.0
 
 
 def cell_area_km2(lat, lon):
-    dlat = float(np.mean(np.diff(lat))); dlon = float(np.mean(np.diff(lon)))
-    ln = np.radians(lat + dlat/2); ls = np.radians(lat - dlat/2)
+    dlat = float(np.mean(np.diff(lat)))
+    dlon = float(np.mean(np.diff(lon)))
+    ln = np.radians(lat + dlat / 2)
+    ls = np.radians(lat - dlat / 2)
     band = R_EARTH**2 * np.radians(dlon) * (np.sin(ln) - np.sin(ls))
     return np.repeat(band[:, None], lon.size, axis=1)
 
@@ -77,17 +95,23 @@ def group_sum(p):
 # ============================================================================
 
 LUH_DIR = Path("/projects/hpcl-cli185/proj-shared/zw5/luh")
-LUH_FILE = {"SSP1_RCP19": "ssp1rcp19_transitions.nc",
-            "SSP2_RCP45": "ssp2rcp45_transitions.nc",
-            "SSP3_RCP70": "ssp3rcp70_transitions.nc",
-            "SSP4_RCP60": "ssp4rcp60_transitions.nc",
-            "SSP5_RCP85": "ssp5rcp85_transitions.nc"}
-HARVEST_VAR_MAP = {"primf_harv": "HARVEST_VH1", "primn_harv": "HARVEST_VH2",
-                   "secmf_harv": "HARVEST_SH1", "secyf_harv": "HARVEST_SH2",
-                   "secnf_harv": "HARVEST_SH3"}
+LUH_FILE = {
+    "SSP1_RCP19": "ssp1rcp19_transitions.nc",
+    "SSP2_RCP45": "ssp2rcp45_transitions.nc",
+    "SSP3_RCP70": "ssp3rcp70_transitions.nc",
+    "SSP4_RCP60": "ssp4rcp60_transitions.nc",
+    "SSP5_RCP85": "ssp5rcp85_transitions.nc",
+}
+HARVEST_VAR_MAP = {
+    "primf_harv": "HARVEST_VH1",
+    "primn_harv": "HARVEST_VH2",
+    "secmf_harv": "HARVEST_SH1",
+    "secyf_harv": "HARVEST_SH2",
+    "secnf_harv": "HARVEST_SH3",
+}
 TREE_PFT_IDXS = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.int64)
-LUH_SSP_YEAR0 = 2015          # LUH2 v2f SSP transitions start at calendar 2015
-LUH_SSP_LAST = 2099           # ... and end at calendar 2099
+LUH_SSP_YEAR0 = 2015  # LUH2 v2f SSP transitions start at calendar 2015
+LUH_SSP_LAST = 2099  # ... and end at calendar 2099
 
 
 def _safe_float32(arr):
@@ -113,7 +137,9 @@ def _build_hr_to_coarse_index(lat_hr, lon_hr, lat_coarse, lon_coarse):
     return coarse_id_2d, inside_2d, np.array([nlat_c, nlon_c], dtype=np.int64)
 
 
-def _distribute_conservatively(coarse_2d, weights_2d, area_2d, coarse_id_2d, inside_2d, ncoarse):
+def _distribute_conservatively(
+    coarse_2d, weights_2d, area_2d, coarse_id_2d, inside_2d, ncoarse
+):
     """frac_i = F * w_i * sum(area) / sum(w*area), conserving harvested AREA (s4_2)."""
     coarse_flat = _safe_float32(coarse_2d).reshape(-1)
     w_flat = _safe_float32(weights_2d).reshape(-1)
@@ -127,11 +153,23 @@ def _distribute_conservatively(coarse_2d, weights_2d, area_2d, coarse_id_2d, ins
     hr_flat = np.zeros_like(w_flat, dtype=np.float32)
     denom = sum_wa[id_flat]
     valid = inside_flat & (denom > 0.0)
-    hr_flat[valid] = (coarse_flat[id_flat[valid]] * sum_a[id_flat[valid]]
-                      * w_flat[valid] / denom[valid]).astype(np.float32)
-    coarse_area_sums = np.bincount(id_flat, weights=hr_flat.astype(np.float64) * a_flat,
-                                   minlength=ncoarse)
-    return hr_flat.reshape(weights_2d.shape), coarse_area_sums, sum_a, id_flat, a_flat, inside_flat
+    hr_flat[valid] = (
+        coarse_flat[id_flat[valid]]
+        * sum_a[id_flat[valid]]
+        * w_flat[valid]
+        / denom[valid]
+    ).astype(np.float32)
+    coarse_area_sums = np.bincount(
+        id_flat, weights=hr_flat.astype(np.float64) * a_flat, minlength=ncoarse
+    )
+    return (
+        hr_flat.reshape(weights_2d.shape),
+        coarse_area_sums,
+        sum_a,
+        id_flat,
+        a_flat,
+        inside_flat,
+    )
 
 
 def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years):
@@ -150,39 +188,48 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
     assert natveg_pct.shape[0] == nout, "natveg_pct must be annual (nout,ny,nx)"
     ny, nx = natveg_pct.shape[1:]
     area_hr = cell_area_km2(latc, lonc)
-    veg_frac = (natveg_pct / 100.0).astype(np.float64)                      # (nout,ny,nx) 0..1
+    veg_frac = (natveg_pct / 100.0).astype(np.float64)  # (nout,ny,nx) 0..1
     luh = xr.open_dataset(LUH_DIR / LUH_FILE[scenario], decode_times=False)
     clat = luh.lat.values
     clon = luh.lon.values
-    lat_sort = np.argsort(clat)                                            # LUH2 lat desc -> asc
+    lat_sort = np.argsort(clat)  # LUH2 lat desc -> asc
     clat_asc = clat[lat_sort]
     coarse_id, inside, cshape = _build_hr_to_coarse_index(latc, lonc, clat_asc, clon)
     ncoarse = int(cshape[0] * cshape[1])
     id_flat = coarse_id.reshape(-1)
     a_in = np.where(inside.reshape(-1), area_hr.reshape(-1).astype(np.float64), 0.0)
-    area_coarse = np.bincount(id_flat, weights=a_in, minlength=ncoarse)     # fine area per coarse cell
+    area_coarse = np.bincount(
+        id_flat, weights=a_in, minlength=ncoarse
+    )  # fine area per coarse cell
 
-    out = {v: np.zeros((nout, ny, nx), dtype=np.float32) for v in HARVEST_VAR_MAP.values()}
+    out = {
+        v: np.zeros((nout, ny, nx), dtype=np.float32) for v in HARVEST_VAR_MAP.values()
+    }
     cons = []
     for k, Y in enumerate(out_years):
-        cal = int(Y) - 1                                                   # k=-1 label convention
+        cal = int(Y) - 1  # k=-1 label convention
         hidx = min(cal, LUH_SSP_LAST) - LUH_SSP_YEAR0
-        vf = veg_frac[k]                                                   # this year's natveg
-        w = ((tree_comp_pct[k] / 100.0) * vf).astype(np.float32)           # forest cover weight
+        vf = veg_frac[k]  # this year's natveg
+        w = ((tree_comp_pct[k] / 100.0) * vf).astype(np.float32)  # forest cover weight
         w = np.where(w > 0, w, 0.0).astype(np.float32)
-        sum_w = np.bincount(id_flat, weights=np.where(inside.reshape(-1), w.reshape(-1), 0.0),
-                            minlength=ncoarse)
-        alloc = sum_w > 0.0                                                # coarse cells with forest
+        sum_w = np.bincount(
+            id_flat,
+            weights=np.where(inside.reshape(-1), w.reshape(-1), 0.0),
+            minlength=ncoarse,
+        )
+        alloc = sum_w > 0.0  # coarse cells with forest
         lut_grids = {}
         luh_area = 0.0
         placed = 0.0
         for luh_name, out_name in HARVEST_VAR_MAP.items():
             coarse = _safe_float32(luh[luh_name].isel(time=hidx).values[lat_sort, :])
             hr, ca_sums, _, _, _, _ = _distribute_conservatively(
-                coarse, w, area_hr, coarse_id, inside, ncoarse)
+                coarse, w, area_hr, coarse_id, inside, ncoarse
+            )
             with np.errstate(divide="ignore", invalid="ignore"):
-                lut = np.divide(hr, vf, out=np.zeros_like(hr, dtype=np.float32),
-                                where=vf > 0.0)
+                lut = np.divide(
+                    hr, vf, out=np.zeros_like(hr, dtype=np.float32), where=vf > 0.0
+                )
             lut_grids[out_name] = lut
             cflat = coarse.reshape(-1).astype(np.float64)
             luh_area += float((cflat * area_coarse)[alloc].sum())
@@ -190,7 +237,9 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
         # cap the 5-category total to <=1 (option A: clip excess)
         lut_sum = sum(lut_grids.values())
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            scale = np.where(lut_sum > 1.0, 1.0 / np.where(lut_sum > 0, lut_sum, 1.0), 1.0)
+            scale = np.where(
+                lut_sum > 1.0, 1.0 / np.where(lut_sum > 0, lut_sum, 1.0), 1.0
+            )
         for out_name, lut in lut_grids.items():
             out[out_name][k] = np.clip(lut * scale, 0.0, 1.0).astype(np.float32)
         cons.append(placed / luh_area if luh_area > 0 else 1.0)
@@ -206,9 +255,11 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
 # static column (option A). This is stage A: the composition on the target grid.
 # ============================================================================
 
-TARGET_DEFAULT = ("/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/"
-                  "Make_surface_data/surfdata_results/"
-                  "landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc")
+TARGET_DEFAULT = (
+    "/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/"
+    "Make_surface_data/surfdata_results/"
+    "landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc"
+)
 
 
 def _march_composition(p_nl, p_ch):
@@ -220,7 +271,7 @@ def _march_composition(p_nl, p_ch):
     """
     ny, nx = p_nl.shape[1:]
     nyr = p_ch.shape[0]
-    P_nl_g = group_sum(p_nl)                                   # (NG,ny,nx)
+    P_nl_g = group_sum(p_nl)  # (NG,ny,nx)
     P_ch_g = np.stack([group_sum(p_ch[k]) for k in range(nyr)])
     P_nl_g_pft = P_nl_g[GRP_OF_PFT]
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -231,8 +282,11 @@ def _march_composition(p_nl, p_ch):
         Ph, Cprev, Cnow = P_harm_g[i - 1], P_ch_g[i - 1], P_ch_g[i]
         dC = Cnow - Cprev
         Cprev_safe = np.where(Cprev > 0, Cprev, 1.0)
-        out = np.where(Ph == 0, np.maximum(dC, 0.0),
-                       np.where(Cprev <= Ph, Ph + dC, Ph * Cnow / Cprev_safe))
+        out = np.where(
+            Ph == 0,
+            np.maximum(dC, 0.0),
+            np.where(Cprev <= Ph, Ph + dC, Ph * Cnow / Cprev_safe),
+        )
         P_harm_g[i] = np.maximum(out, 0.0)
 
     def resplit(i):
@@ -272,29 +326,37 @@ def build_landuse_timeseries(args):
     lonc = np.asarray(t["LONGXY"].values)[0, :]
     tyr = t["YEAR"].values.astype(int)
     i23 = int(np.where(tyr == ANCHOR)[0][0])
-    natveg_a = np.nan_to_num(t["PCT_NATVEG"].values.astype(np.float64))          # (ny,nx) static
-    natpft23 = np.nan_to_num(t["PCT_NAT_PFT"].isel(time=i23).values.astype(np.float64))  # (17,ny,nx)
-    grazing23 = np.nan_to_num(t["GRAZING"].isel(time=i23).values.astype(np.float32))     # (ny,nx)
+    natveg_a = np.nan_to_num(
+        t["PCT_NATVEG"].values.astype(np.float64)
+    )  # (ny,nx) static
+    natpft23 = np.nan_to_num(
+        t["PCT_NAT_PFT"].isel(time=i23).values.astype(np.float64)
+    )  # (17,ny,nx)
+    grazing23 = np.nan_to_num(
+        t["GRAZING"].isel(time=i23).values.astype(np.float32)
+    )  # (ny,nx)
     t.close()
     ny, nx = natveg_a.shape
 
-    chen_path = (args.chen_targetgrid or (OUTDIR / "interim" /
-                 f"chen_targetgrid_{args.scenario}_2015-2100_1_24deg.nc"))
+    chen_path = args.chen_targetgrid or (
+        OUTDIR / "interim" / f"chen_targetgrid_{args.scenario}_2015-2100_1_24deg.nc"
+    )
     c = xr.open_dataset(chen_path)
-    assert np.allclose(c.lat.values, latc) and np.allclose(c.lon.values, lonc), \
+    assert np.allclose(c.lat.values, latc) and np.allclose(c.lon.values, lonc), (
         "chen target-grid file grid != anchor grid"
+    )
     cyrs = c.time.values.astype(int)
-    cnv = np.nan_to_num(c.PCT_NATVEG.values.astype(np.float64))                  # (nt,ny,nx)
-    cpf = np.nan_to_num(c.PCT_NAT_PFT.values.astype(np.float64))                 # (nt,17,ny,nx)
+    cnv = np.nan_to_num(c.PCT_NATVEG.values.astype(np.float64))  # (nt,ny,nx)
+    cpf = np.nan_to_num(c.PCT_NAT_PFT.values.astype(np.float64))  # (nt,17,ny,nx)
     c.close()
 
     # anchor p(j) = target static natveg * target natpft(2023); Chen p(j) annual
     p_nl = natpft23 * natveg_a[None] / 100.0
     p_ch_native = cpf * cnv[:, None] / 100.0
-    annual = np.arange(ANCHOR, END + 1)                                          # 2023..2100
+    annual = np.arange(ANCHOR, END + 1)  # 2023..2100
     p_ch = _interp_annual(p_ch_native, cyrs, annual)
 
-    p_harm = _march_composition(p_nl, p_ch)                                      # (nyr,17,ny,nx)
+    p_harm = _march_composition(p_nl, p_ch)  # (nyr,17,ny,nx)
 
     # recover composition; force 100% bare where target natveg==0 or Σ==0
     natveg_zero = natveg_a == 0.0
@@ -311,26 +373,38 @@ def build_landuse_timeseries(args):
             ci = np.where(s > 0, 100.0 * p_harm[i] / np.where(s > 0, s, 1.0)[None], 0.0)
         fill = natveg_zero | (s <= 1e-9)
         ci[:, fill] = 0.0
-        ci[0, fill] = 100.0                                                      # PFT0 (bare) = 100
+        ci[0, fill] = 100.0  # PFT0 (bare) = 100
         comp[i] = ci.astype(np.float32)
         nvi = np.clip(s, 0.0, 100.0)
         nvi[fill] = 0.0
         natveg_dyn[i] = nvi
 
-    out_years = np.arange(ANCHOR + 1, END + 1)                                   # 2024..2100
-    pft_out = comp[1:]                                                           # drop 2023 anchor slice
-    natveg_out = natveg_dyn[1:]                                                  # (nout,ny,nx)
+    out_years = np.arange(ANCHOR + 1, END + 1)  # 2024..2100
+    pft_out = comp[1:]  # drop 2023 anchor slice
+    natveg_out = natveg_dyn[1:]  # (nout,ny,nx)
 
     # ---- Stage B: harvest downscale (LUH2 scenario -> target grid) ----
     # Dynamic natveg here (weight + LUT denominator), matching s4_2's historical
     # convention. The file's PCT_NATVEG stays static, so ELM's recovered harvest
     # area carries a factor natveg_static/natveg_dyn; reported below.
-    tree_comp = pft_out[:, TREE_PFT_IDXS].sum(axis=1)                            # (nout,ny,nx) tree % of natveg
-    harv, cons = downscale_harvest(args.scenario, latc, lonc, tree_comp, natveg_out, out_years)
-    grazing_out = np.repeat(grazing23[None], len(out_years), axis=0).astype(np.float32)  # persist 2023
-    print(f"  harvest area-conservation (placed/allocatable LUH2): "
-          f"min {min(cons):.4f} mean {float(np.mean(cons)):.4f} max {max(cons):.4f}")
-    for v in ("HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3"):
+    tree_comp = pft_out[:, TREE_PFT_IDXS].sum(axis=1)  # (nout,ny,nx) tree % of natveg
+    harv, cons = downscale_harvest(
+        args.scenario, latc, lonc, tree_comp, natveg_out, out_years
+    )
+    grazing_out = np.repeat(grazing23[None], len(out_years), axis=0).astype(
+        np.float32
+    )  # persist 2023
+    print(
+        f"  harvest area-conservation (placed/allocatable LUH2): "
+        f"min {min(cons):.4f} mean {float(np.mean(cons)):.4f} max {max(cons):.4f}"
+    )
+    for v in (
+        "HARVEST_VH1",
+        "HARVEST_VH2",
+        "HARVEST_SH1",
+        "HARVEST_SH2",
+        "HARVEST_SH3",
+    ):
         print(f"    {v}: max {harv[v].max():.4g} mean {harv[v].mean():.4g}")
     # How far the file's static PCT_NATVEG sits from the denominator actually used.
     # ELM recovers harvested area = HARVEST * PCT_NATVEG_static, so this ratio is
@@ -339,49 +413,90 @@ def build_landuse_timeseries(args):
     if _m.any():
         _r = np.broadcast_to(natveg_a[None], natveg_out.shape)[_m] / natveg_out[_m]
         _p = np.percentile(_r, [5, 50, 95])
-        print(f"  natveg_static/natveg_dynamic (ELM area offset): "
-              f"p05 {_p[0]:.4f} p50 {_p[1]:.4f} p95 {_p[2]:.4f} max {_r.max():.4f}")
+        print(
+            f"  natveg_static/natveg_dynamic (ELM area offset): "
+            f"p05 {_p[0]:.4f} p50 {_p[1]:.4f} p95 {_p[2]:.4f} max {_r.max():.4f}"
+        )
         _wa = np.repeat(cell_area_km2(latc, lonc)[None], len(out_years), axis=0)[_m]
-        print(f"  area-weighted mean offset: "
-              f"{float((_r * _wa).sum() / _wa.sum()):.4f} (1.0 = no offset)")
+        print(
+            f"  area-weighted mean offset: "
+            f"{float((_r * _wa).sum() / _wa.sum()):.4f} (1.0 = no offset)"
+        )
 
     # ---- validation ----
     print(f"[timeseries stageA] scenario {args.scenario}  grid {ny}x{nx}")
     ss = pft_out.sum(axis=1)
-    print(f"  sum-to-100: max|sum-100| = {float(np.abs(ss - 100.0).max()):.4f}  "
-          f"(min {ss.min():.3f} max {ss.max():.3f})")
+    print(
+        f"  sum-to-100: max|sum-100| = {float(np.abs(ss - 100.0).max()):.4f}  "
+        f"(min {ss.min():.3f} max {ss.max():.3f})"
+    )
     m_veg = natveg_a > 0
     d23 = float(np.abs(comp[0][:, m_veg] - natpft23[:, m_veg].astype(np.float32)).max())
     n_anom = int((natveg_zero & (natpft23[0] < 99.9)).sum())
     print(f"  anchor 2023 composition == target 2023 (natveg>0): max|diff| = {d23:.4f}")
     nz = int(natveg_zero.sum())
-    barefill_ok = np.allclose(pft_out[:, 0][:, natveg_zero], 100.0) and \
-        np.allclose(pft_out[:, 1:][:, :, natveg_zero], 0.0)
-    print(f"  natveg=0 cells ({nz:,}) -> 100% bare: {barefill_ok}  "
-          f"({n_anom} target cells were non-bare at natveg=0, overridden)")
+    barefill_ok = np.allclose(pft_out[:, 0][:, natveg_zero], 100.0) and np.allclose(
+        pft_out[:, 1:][:, :, natveg_zero], 0.0
+    )
+    print(
+        f"  natveg=0 cells ({nz:,}) -> 100% bare: {barefill_ok}  "
+        f"({n_anom} target cells were non-bare at natveg=0, overridden)"
+    )
 
     # ---- Stage C: assemble future landuse.timeseries with the target schema ----
     tds = xr.open_dataset(tgt, decode_times=False)
-    STATIC_VARS = ["LANDFRAC_PFT", "PFTDATA_MASK", "PCT_NATVEG", "PCT_CROP", "AREA",
-                   "LONGXY", "LATIXY", "PCT_WETLAND", "PCT_LAKE", "PCT_GLACIER",
-                   "PCT_URBAN", "APATITE_P", "LABILE_P", "OCCLUDED_P", "SECONDARY_P"]
+    STATIC_VARS = [
+        "LANDFRAC_PFT",
+        "PFTDATA_MASK",
+        "PCT_NATVEG",
+        "PCT_CROP",
+        "AREA",
+        "LONGXY",
+        "LATIXY",
+        "PCT_WETLAND",
+        "PCT_LAKE",
+        "PCT_GLACIER",
+        "PCT_URBAN",
+        "APATITE_P",
+        "LABILE_P",
+        "OCCLUDED_P",
+        "SECONDARY_P",
+    ]
 
     def _at(v):
         return dict(tds[v].attrs) if v in tds.variables else {}
 
     dv = {}
-    for v in STATIC_VARS:                                    # copy verbatim from target
+    for v in STATIC_VARS:  # copy verbatim from target
         if v in tds.variables:
             dv[v] = (tds[v].dims, tds[v].values, _at(v))
     # cast time-varying vars to float64 to match the target dtype exactly
-    dv["PCT_NAT_PFT"] = (("time", "natpft", "lsmlat", "lsmlon"),
-                         pft_out.astype(np.float64), _at("PCT_NAT_PFT"))
-    for v in ("HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3"):
+    dv["PCT_NAT_PFT"] = (
+        ("time", "natpft", "lsmlat", "lsmlon"),
+        pft_out.astype(np.float64),
+        _at("PCT_NAT_PFT"),
+    )
+    for v in (
+        "HARVEST_VH1",
+        "HARVEST_VH2",
+        "HARVEST_SH1",
+        "HARVEST_SH2",
+        "HARVEST_SH3",
+    ):
         dv[v] = (("time", "lsmlat", "lsmlon"), harv[v].astype(np.float64), _at(v))
-    dv["GRAZING"] = (("time", "lsmlat", "lsmlon"), grazing_out.astype(np.float64), _at("GRAZING"))
+    dv["GRAZING"] = (
+        ("time", "lsmlat", "lsmlon"),
+        grazing_out.astype(np.float64),
+        _at("GRAZING"),
+    )
     dv["YEAR"] = (("time",), out_years.astype(np.int32), _at("YEAR"))
-    fn = np.array([f"harmonized_{args.scenario}_{int(y)}".ljust(256)[:256].encode()
-                   for y in out_years], dtype="S256")
+    fn = np.array(
+        [
+            f"harmonized_{args.scenario}_{int(y)}".ljust(256)[:256].encode()
+            for y in out_years
+        ],
+        dtype="S256",
+    )
     dv["input_pftdata_filename"] = (("time",), fn, _at("input_pftdata_filename"))
 
     coords = {"time": out_years.astype(np.int32)}
@@ -391,57 +506,93 @@ def build_landuse_timeseries(args):
     out_ds.attrs.update(dict(tds.attrs))
     out_ds.attrs.update(
         harmonized_scenario=args.scenario,
-        harmonized_note=(f"future 2024-2100: NLCD-2023 state (from {Path(tgt).name}) + "
-                         f"Chen {args.scenario} trend (harmonize_seus.py §13); harvest downscaled "
-                         f"from LUH2 {LUH_FILE[args.scenario]} (forest-weighted, area-conserving); "
-                         f"GRAZING persisted from target 2023; natveg=0 -> 100% bare"),
+        harmonized_note=(
+            f"future 2024-2100: NLCD-2023 state (from {Path(tgt).name}) + "
+            f"Chen {args.scenario} trend (harmonize_seus.py §13); harvest downscaled "
+            f"from LUH2 {LUH_FILE[args.scenario]} (forest-weighted, area-conserving); "
+            f"GRAZING persisted from target 2023; natveg=0 -> 100% bare"
+        ),
         harvest_natveg_convention=(
             "HARVEST_* were downscaled and converted to LUT units using the ANNUAL "
             "harmonized natveg (sum_j p(j)), matching s4_2's historical convention. "
             "PCT_NATVEG in this file is the target's STATIC column and is NOT the "
             "denominator used; ELM's recovered harvest area therefore carries a factor "
-            "natveg_static/natveg_annual."))
+            "natveg_static/natveg_annual."
+        ),
+    )
 
     # grid hard-check vs target
-    gok = (np.array_equal(out_ds["LATIXY"].values, tds["LATIXY"].values)
-           and np.array_equal(out_ds["LONGXY"].values, tds["LONGXY"].values)
-           and out_ds.sizes["lsmlat"] == tds.sizes["lsmlat"]
-           and out_ds.sizes["lsmlon"] == tds.sizes["lsmlon"])
+    gok = (
+        np.array_equal(out_ds["LATIXY"].values, tds["LATIXY"].values)
+        and np.array_equal(out_ds["LONGXY"].values, tds["LONGXY"].values)
+        and out_ds.sizes["lsmlat"] == tds.sizes["lsmlat"]
+        and out_ds.sizes["lsmlon"] == tds.sizes["lsmlon"]
+    )
     tds.close()
     print(f"  grid identical to target (LATIXY/LONGXY/dims): {gok}")
     print(f"  variables: {sorted(out_ds.data_vars)}")
     assert gok, "output grid does not match target"
 
-    out = args.out or (OUTDIR / "processed" /
-                       f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{args.scenario}_simyr2024-2100.nc")
+    out = args.out or (
+        OUTDIR
+        / "processed"
+        / f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{args.scenario}_simyr2024-2100.nc"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
-    enc = {v: {"zlib": True, "complevel": 4}
-           for v in out_ds.data_vars if out_ds[v].dtype.kind in "fi"}
+    enc = {
+        v: {"zlib": True, "complevel": 4}
+        for v in out_ds.data_vars
+        if out_ds[v].dtype.kind in "fi"
+    }
     out_ds.to_netcdf(out, encoding=enc)
-    print(f"[landuse.timeseries] wrote {out}  "
-          f"({len(out_years)} yrs {int(out_years[0])}..{int(out_years[-1])})")
+    print(
+        f"[landuse.timeseries] wrote {out}  "
+        f"({len(out_years)} yrs {int(out_years[0])}..{int(out_years[-1])})"
+    )
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--hist-start", type=int, default=ANCHOR + 1,
-                    help="first output year (default %d = harmonized future only; NLCD "
-                         "owns <=%d in its own file). Pass 1850 to prepend NLCD history."
-                         % (ANCHOR + 1, ANCHOR))
-    ap.add_argument("--scenario", default="SSP1_RCP19", choices=list(CHEN),
-                    help="Chen SSP-RCP scenario (default SSP1_RCP19)")
+    ap.add_argument(
+        "--hist-start",
+        type=int,
+        default=ANCHOR + 1,
+        help="first output year (default %d = harmonized future only; NLCD "
+        "owns <=%d in its own file). Pass 1850 to prepend NLCD history."
+        % (ANCHOR + 1, ANCHOR),
+    )
+    ap.add_argument(
+        "--scenario",
+        default="SSP1_RCP19",
+        choices=list(CHEN),
+        help="Chen SSP-RCP scenario (default SSP1_RCP19)",
+    )
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--build-timeseries", action="store_true",
-                    help="build future landuse.timeseries on the target ELM grid "
-                         "(stage A: PCT_NAT_PFT only, natveg=0 -> 100%% bare)")
-    ap.add_argument("--anchor-file", type=Path, default=None,
-                    help="target landuse.timeseries (anchor + grid); default TARGET_DEFAULT")
-    ap.add_argument("--chen-targetgrid", type=Path, default=None,
-                    help="Chen file on the target grid (01 --like <target>); default from scenario")
+    ap.add_argument(
+        "--build-timeseries",
+        action="store_true",
+        help="build future landuse.timeseries on the target ELM grid "
+        "(stage A: PCT_NAT_PFT only, natveg=0 -> 100%% bare)",
+    )
+    ap.add_argument(
+        "--anchor-file",
+        type=Path,
+        default=None,
+        help="target landuse.timeseries (anchor + grid); default TARGET_DEFAULT",
+    )
+    ap.add_argument(
+        "--chen-targetgrid",
+        type=Path,
+        default=None,
+        help="Chen file on the target grid (01 --like <target>); default from scenario",
+    )
     args = ap.parse_args()
     if args.build_timeseries:
         return build_landuse_timeseries(args)
+    # Standalone / SEUS-pilot path. Unreachable when --build-timeseries is set
+    # (the return above). Not maintained: needs CONUS Chen files that are no
+    # longer produced, and the NLCD grid cannot reach the 24.0N SEUS bound.
     ch_path = OUTDIR / "processed" / CHEN[args.scenario]
     missing = [p for p in (NL, ch_path) if not Path(p).exists()]
     if missing:
@@ -453,7 +604,9 @@ def main():
         print("")
         print("ELM forcing is produced by the --build-timeseries mode, which reads a")
         print("target-grid Chen file from outputs/interim/ and is unaffected by this.")
-        print("Standalone additionally cannot reach the documented 24.0N southern bound:")
+        print(
+            "Standalone additionally cannot reach the documented 24.0N southern bound:"
+        )
         print("the NLCD source grid starts at 25.0N, so its SEUS crop is 300 rows, 24")
         print("rows short of the 324-row target grid. Use --build-timeseries instead.")
         print("")
@@ -463,8 +616,10 @@ def main():
         return 1
     print(f"scenario {args.scenario}  <-  {ch_path.name}")
 
-    nl = xr.open_dataset(NL); ch = xr.open_dataset(ch_path)
-    lat = nl.lat.values; lon = nl.lon.values
+    nl = xr.open_dataset(NL)
+    ch = xr.open_dataset(ch_path)
+    lat = nl.lat.values
+    lon = nl.lon.values
     assert np.allclose(lat, ch.lat.values) and np.allclose(lon, ch.lon.values)
 
     # --- SEUS crop indices ---
@@ -474,42 +629,54 @@ def main():
     lat_s, lon_s = lat[la0:la1], lon[lo0:lo1]
     ny, nx = lat_s.size, lon_s.size
     area = cell_area_km2(lat_s, lon_s)
-    print(f"SEUS grid {ny} x {nx}  lat {lat_s[0]:.2f}..{lat_s[-1]:.2f} "
-          f"lon {lon_s[0]:.2f}..{lon_s[-1]:.2f}")
+    print(
+        f"SEUS grid {ny} x {nx}  lat {lat_s[0]:.2f}..{lat_s[-1]:.2f} "
+        f"lon {lon_s[0]:.2f}..{lon_s[-1]:.2f}"
+    )
     # The NLCD source grid starts at 25.0N, so the crop cannot reach SEUS lat0=24.0.
     # Say so loudly rather than silently shipping a domain ~1 deg narrower than the
     # documented bbox (and 24 rows short of the --build-timeseries target grid).
     dlat = float(np.mean(np.diff(lat_s)))
     if lat_s[0] - SEUS["lat0"] > 0.5 * dlat:
-        print(f"  WARNING: southern bound is {lat_s[0]:.4f}N, not the documented "
-              f"{SEUS['lat0']:.1f}N -- short by {lat_s[0] - SEUS['lat0']:.4f} deg "
-              f"({round((lat_s[0] - SEUS['lat0']) / dlat)} rows). The input grid "
-              f"({Path(NL).name}) begins at {lat[0]:.4f}N; this is an input-extent "
-              f"limit, not a cropping bug. Use --build-timeseries for ELM forcing.")
+        print(
+            f"  WARNING: southern bound is {lat_s[0]:.4f}N, not the documented "
+            f"{SEUS['lat0']:.1f}N -- short by {lat_s[0] - SEUS['lat0']:.4f} deg "
+            f"({round((lat_s[0] - SEUS['lat0']) / dlat)} rows). The input grid "
+            f"({Path(NL).name}) begins at {lat[0]:.4f}N; this is an input-extent "
+            f"limit, not a cropping bug. Use --build-timeseries for ELM forcing."
+        )
 
     nl_yrs = nl.time.dt.year.values
     ch_yrs = ch.time.values.astype(int)
 
     def nl_p(year):
         i = int(np.where(nl_yrs == year)[0][0])
-        nv = np.nan_to_num(nl.PCT_NATVEG.isel(time=i).values[la0:la1, lo0:lo1].astype(np.float64))
-        pf = np.nan_to_num(nl.PCT_NAT_PFT.isel(time=i).values[:, la0:la1, lo0:lo1].astype(np.float64))
-        return nv, pf, pf * nv[None] / 100.0      # nv, pf, p(j)
+        nv = np.nan_to_num(
+            nl.PCT_NATVEG.isel(time=i).values[la0:la1, lo0:lo1].astype(np.float64)
+        )
+        pf = np.nan_to_num(
+            nl.PCT_NAT_PFT.isel(time=i).values[:, la0:la1, lo0:lo1].astype(np.float64)
+        )
+        return nv, pf, pf * nv[None] / 100.0  # nv, pf, p(j)
 
     def ch_p(year):
         i = int(np.where(ch_yrs == year)[0][0])
-        nv = np.nan_to_num(ch.PCT_NATVEG.isel(time=i).values[la0:la1, lo0:lo1].astype(np.float64))
-        pf = np.nan_to_num(ch.PCT_NAT_PFT.isel(time=i).values[:, la0:la1, lo0:lo1].astype(np.float64))
+        nv = np.nan_to_num(
+            ch.PCT_NATVEG.isel(time=i).values[la0:la1, lo0:lo1].astype(np.float64)
+        )
+        pf = np.nan_to_num(
+            ch.PCT_NAT_PFT.isel(time=i).values[:, la0:la1, lo0:lo1].astype(np.float64)
+        )
         return pf * nv[None] / 100.0
 
     # --- anchor: NLCD 2023 ---
-    nv23, pf23, p_nl = nl_p(ANCHOR)                       # p_nl: (NPFT,ny,nx)
-    seus_mask = nv23 > 0.0                                # cells with natveg at anchor
+    nv23, pf23, p_nl = nl_p(ANCHOR)  # p_nl: (NPFT,ny,nx)
+    seus_mask = nv23 > 0.0  # cells with natveg at anchor
 
     # --- Chen native p(j), then linear-interp to annual on p(j) (§13.1/13.2) ---
-    native = ch_yrs                                        # 2015,2020,2025..2100
+    native = ch_yrs  # 2015,2020,2025..2100
     p_ch_native = np.stack([ch_p(int(y)) for y in native])  # (n_native,NPFT,ny,nx)
-    annual = np.arange(ANCHOR, END + 1)                   # 2023..2100  (index 0 = anchor)
+    annual = np.arange(ANCHOR, END + 1)  # 2023..2100  (index 0 = anchor)
     p_ch = np.empty((annual.size, NPFT, ny, nx), dtype=np.float64)
     for k, y in enumerate(annual):
         if y <= native[0]:
@@ -517,47 +684,58 @@ def main():
         elif y >= native[-1]:
             p_ch[k] = p_ch_native[-1]
         else:
-            b = int(np.searchsorted(native, y, side="right"))   # native[b-1] <= y < native[b]
+            b = int(
+                np.searchsorted(native, y, side="right")
+            )  # native[b-1] <= y < native[b]
             w = (y - native[b - 1]) / (native[b] - native[b - 1])
             p_ch[k] = p_ch_native[b - 1] * (1 - w) + p_ch_native[b] * w
 
     # --- group totals ---
-    P_nl_g = group_sum(p_nl)                              # (NG,ny,nx)
-    P_ch_g = np.stack([group_sum(p_ch[k]) for k in range(annual.size)])  # (nyr,NG,ny,nx)
+    P_nl_g = group_sum(p_nl)  # (NG,ny,nx)
+    P_ch_g = np.stack(
+        [group_sum(p_ch[k]) for k in range(annual.size)]
+    )  # (nyr,NG,ny,nx)
 
     # frozen within-group NLCD proportions (§13.6)
-    P_nl_g_pft = P_nl_g[GRP_OF_PFT]                       # (NPFT,ny,nx)
+    P_nl_g_pft = P_nl_g[GRP_OF_PFT]  # (NPFT,ny,nx)
     with np.errstate(invalid="ignore", divide="ignore"):
         w_frozen = np.where(P_nl_g_pft > 0, p_nl / P_nl_g_pft, 0.0)
 
     # --- march group totals annually (§13.5) ---
     nyr = annual.size
     P_harm_g = np.empty((nyr, NG, ny, nx), dtype=np.float64)
-    P_harm_g[0] = P_nl_g                                  # anchor 2023 = NLCD
+    P_harm_g[0] = P_nl_g  # anchor 2023 = NLCD
     for i in range(1, nyr):
         Ph, Cprev, Cnow = P_harm_g[i - 1], P_ch_g[i - 1], P_ch_g[i]
         dC = Cnow - Cprev
         Cprev_safe = np.where(Cprev > 0, Cprev, 1.0)
-        out = np.where(Ph == 0, np.maximum(dC, 0.0),
-                       np.where(Cprev <= Ph, Ph + dC, Ph * Cnow / Cprev_safe))
+        out = np.where(
+            Ph == 0,
+            np.maximum(dC, 0.0),
+            np.where(Cprev <= Ph, Ph + dC, Ph * Cnow / Cprev_safe),
+        )
         P_harm_g[i] = np.maximum(out, 0.0)
 
     # --- re-split group totals to PFT (§13.6): frozen NLCD basis, Chen fallback where seeded ---
     def resplit(i):
-        Pg_pft = P_harm_g[i][GRP_OF_PFT]                  # (NPFT,ny,nx)
+        Pg_pft = P_harm_g[i][GRP_OF_PFT]  # (NPFT,ny,nx)
         P_ch_g_pft = P_ch_g[i][GRP_OF_PFT]
         with np.errstate(invalid="ignore", divide="ignore"):
             w_ch = np.where(P_ch_g_pft > 0, p_ch[i] / P_ch_g_pft, 0.0)
-        w = np.where(P_nl_g_pft > 0, w_frozen, w_ch)      # frozen where NLCD had group, else Chen split
+        w = np.where(
+            P_nl_g_pft > 0, w_frozen, w_ch
+        )  # frozen where NLCD had group, else Chen split
         ph = Pg_pft * w
-        ph[FORCE_ZERO] = 0.0                              # no boreal/tropical in SEUS
+        ph[FORCE_ZERO] = 0.0  # no boreal/tropical in SEUS
         return ph
 
-    p_harm = np.stack([resplit(i) for i in range(nyr)])   # (nyr,NPFT,ny,nx), years 2023..2100
+    p_harm = np.stack(
+        [resplit(i) for i in range(nyr)]
+    )  # (nyr,NPFT,ny,nx), years 2023..2100
 
     # --- recover output variables (§13.7) ---
     def recover(ph):
-        s = ph.sum(axis=0)                                # natveg as % of cell (pre-clip)
+        s = ph.sum(axis=0)  # natveg as % of cell (pre-clip)
         natveg = np.clip(s, 0, 100)
         with np.errstate(invalid="ignore", divide="ignore"):
             pct = np.where(s > 0, 100.0 * ph / s[None], 0.0)
@@ -569,12 +747,12 @@ def main():
     nat_out = np.zeros((len(out_years), ny, nx), dtype=np.float32)
     pft_out = np.zeros((len(out_years), NPFT, ny, nx), dtype=np.float32)
     for it, y in enumerate(out_years):
-        if y <= ANCHOR:                                   # NLCD passthrough (exact), incl. anchor 2023
+        if y <= ANCHOR:  # NLCD passthrough (exact), incl. anchor 2023
             nv, pf, _ = nl_p(y)
             nat_out[it] = nv.astype(np.float32)
             pf[FORCE_ZERO] = 0.0
             pft_out[it] = pf.astype(np.float32)
-        else:                                             # harmonized future
+        else:  # harmonized future
             nat_out[it], pft_out[it] = recover(p_harm[y - ANCHOR])
 
     # ================= validation (§13.10) =================
@@ -588,8 +766,10 @@ def main():
     print(f"  (2) PCT_NATVEG range : [{nat_out.min():.2f}, {nat_out.max():.2f}]")
     # (3) anchor identity: 2023 == NLCD 2023
     d_anchor = float(np.abs(P_harm_g[0] - P_nl_g).max())
-    print(f"  (3) internal anchor P_harm_g[{ANCHOR}] == NLCD {ANCHOR} group totals : "
-          f"max|diff| = {d_anchor:.2e}   (output starts {out_years[0]}; {ANCHOR} is NLCD's own file)")
+    print(
+        f"  (3) internal anchor P_harm_g[{ANCHOR}] == NLCD {ANCHOR} group totals : "
+        f"max|diff| = {d_anchor:.2e}   (output starts {out_years[0]}; {ANCHOR} is NLCD's own file)"
+    )
     # (4) boreal/PFT6 zero
     fz = float(np.abs(pft_out[:, FORCE_ZERO, :, :]).max())
     print(f"  (4) boreal+PFT6 max value (should be 0) : {fz:.4f}")
@@ -603,25 +783,40 @@ def main():
         if mm.sum() == 0:
             continue
         agree = np.mean(np.sign(dHarm[gi][mm]) == np.sign(dChen[gi][mm])) * 100
-        print(f"        {g:<6} sign-agree {agree:5.1f}%   "
-              f"Δharm={np.average(dHarm[gi][mm], weights=area[mm]):+6.2f}  "
-              f"Δchen={np.average(dChen[gi][mm], weights=area[mm]):+6.2f} (% of cell)")
+        print(
+            f"        {g:<6} sign-agree {agree:5.1f}%   "
+            f"Δharm={np.average(dHarm[gi][mm], weights=area[mm]):+6.2f}  "
+            f"Δchen={np.average(dChen[gi][mm], weights=area[mm]):+6.2f} (% of cell)"
+        )
     # (6) budget residual: annual Chen natveg change vs harmonized natveg change
-    dP_ch_tot = (P_ch_g.sum(axis=1)[1:] - P_ch_g.sum(axis=1)[:-1])       # (nyr-1,ny,nx)
-    dP_hm_tot = (P_harm_g.sum(axis=1)[1:] - P_harm_g.sum(axis=1)[:-1])
+    dP_ch_tot = P_ch_g.sum(axis=1)[1:] - P_ch_g.sum(axis=1)[:-1]  # (nyr-1,ny,nx)
+    dP_hm_tot = P_harm_g.sum(axis=1)[1:] - P_harm_g.sum(axis=1)[:-1]
     resid = np.abs(dP_ch_tot - dP_hm_tot)[:, seus_mask]
-    print(f"  (6) budget residual |Δchen-Δharm| per yr/cell : "
-          f"mean {resid.mean():.4f}  p99 {np.percentile(resid,99):.3f}  max {resid.max():.3f} (% of cell)")
+    print(
+        f"  (6) budget residual |Δchen-Δharm| per yr/cell : "
+        f"mean {resid.mean():.4f}  p99 {np.percentile(resid, 99):.3f}  max {resid.max():.3f} (% of cell)"
+    )
     # (7) interp reproduces native at native years
     err = 0.0
     for y in native:
         if ANCHOR <= y <= END:
-            err = max(err, float(np.abs(p_ch[int(y) - ANCHOR] - p_ch_native[int(np.where(native==y)[0][0])]).max()))
+            err = max(
+                err,
+                float(
+                    np.abs(
+                        p_ch[int(y) - ANCHOR]
+                        - p_ch_native[int(np.where(native == y)[0][0])]
+                    ).max()
+                ),
+            )
     print(f"  (7) annual interp reproduces native years : max|diff| = {err:.6f}")
 
     # ================= write NetCDF =================
-    out = args.out or (OUTDIR / "processed" /
-                       f"harmonized_SEUS_{args.scenario}_{hist_start}-{END}_1_24deg.nc")
+    out = args.out or (
+        OUTDIR
+        / "processed"
+        / f"harmonized_SEUS_{args.scenario}_{hist_start}-{END}_1_24deg.nc"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     ds = xr.Dataset(
         data_vars=dict(
@@ -635,19 +830,30 @@ def main():
             lon=("lon", lon_s.astype(np.float64)),
         ),
     )
-    ds["pft_name"] = (("natpft",), np.array([s.ljust(48) for s in ELM_PFT_NAMES], dtype="S48"))
+    ds["pft_name"] = (
+        ("natpft",),
+        np.array([s.ljust(48) for s in ELM_PFT_NAMES], dtype="S48"),
+    )
     ds["lat"].attrs.update(units="degrees_north", long_name="latitude")
     ds["lon"].attrs.update(units="degrees_east", long_name="longitude")
     ds["time"].attrs.update(units="year", long_name="calendar year")
     for v in ("PCT_NATVEG", "PCT_NAT_PFT"):
-        ds[v].attrs.update(units="%", valid_min=np.float32(0), valid_max=np.float32(100))
-    ds["PCT_NAT_PFT"].attrs["long_name"] = "natural PFT cover within PCT_NATVEG (sums to 100)"
+        ds[v].attrs.update(
+            units="%", valid_min=np.float32(0), valid_max=np.float32(100)
+        )
+    ds["PCT_NAT_PFT"].attrs["long_name"] = (
+        "natural PFT cover within PCT_NATVEG (sums to 100)"
+    )
     ds.attrs.update(
         title="Harmonized SEUS land use: NLCD state + Chen2022 SSP1-RCP1.9 trend",
-        method=("delta-harmonization; anchor=NLCD 2023; group-level Chen2022 eq.1 "
-                "min-footprint marched annually; NLCD-frozen 2023 within-group re-split; "
-                "Chen interpolated to annual on p(j); boreal/PFT6 forced 0"),
-        base_file=str(NL), scenario_file=str(ch_path), scenario=args.scenario,
+        method=(
+            "delta-harmonization; anchor=NLCD 2023; group-level Chen2022 eq.1 "
+            "min-footprint marched annually; NLCD-frozen 2023 within-group re-split; "
+            "Chen interpolated to annual on p(j); boreal/PFT6 forced 0"
+        ),
+        base_file=str(NL),
+        scenario_file=str(ch_path),
+        scenario=args.scenario,
         seus_bbox=f"lon {SEUS['lon0']}..{SEUS['lon1']}, lat {SEUS['lat0']}..{SEUS['lat1']}",
         anchor_year=ANCHOR,
     )
@@ -657,12 +863,21 @@ def main():
     # diagnostics for follow-up plotting
     diag = OUTDIR / "interim" / f"harmonize_seus_diag_{args.scenario}.npz"
     np.savez_compressed(
-        diag, years=np.array(out_years), annual=annual, lat=lat_s, lon=lon_s,
-        area=area, seus_mask=seus_mask,
-        Pnl_g=P_nl_g.astype(np.float32), Pch_g=P_ch_g.astype(np.float32),
-        Pharm_g=P_harm_g.astype(np.float32), gnames=np.array(GN))
+        diag,
+        years=np.array(out_years),
+        annual=annual,
+        lat=lat_s,
+        lon=lon_s,
+        area=area,
+        seus_mask=seus_mask,
+        Pnl_g=P_nl_g.astype(np.float32),
+        Pch_g=P_ch_g.astype(np.float32),
+        Pharm_g=P_harm_g.astype(np.float32),
+        gnames=np.array(GN),
+    )
     print(f"wrote {diag}")
-    nl.close(); ch.close()
+    nl.close()
+    ch.close()
 
 
 if __name__ == "__main__":
