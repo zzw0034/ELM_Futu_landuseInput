@@ -13,4 +13,4 @@
 set -euo pipefail
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
-$PY scripts/03_harmonize_seus_diag.py
+$PY scripts/analysis/03_harmonize_seus_diag.py

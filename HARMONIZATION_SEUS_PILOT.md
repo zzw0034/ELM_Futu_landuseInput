@@ -1,14 +1,31 @@
 # §13 — Harmonization method (SEUS pilot spec)
 
-**Status: implementable draft, not yet run.** Scope is the Southeast US pilot
-(bbox lon −95..−74, lat 24..37.5). The full-CONUS version is the same method
-plus the boreal drop-list of §12.5/§11c, which is inert in SEUS (see 13.3).
+**Status: implemented.** Formulas in 13.0–13.8 are unchanged. Code:
+`scripts/02_harmonize_seus.py`.
+
+- **ELM forcing (maintained):** `02 --build-timeseries`. Reads the target
+  `landuse.timeseries` (324×504) and a Chen file re-aggregated onto that grid
+  (`01 --like <target>`). Writes
+  `outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc`.
+  Details: `FUTURE_LANDUSE_TIMESERIES.md`.
+- **Standalone (not maintained):** `02` without `--build-timeseries`. Crops the
+  CONUS NLCD + CONUS Chen files to the SEUS bbox as this spec describes, and
+  writes `harmonized_SEUS_<SSP>_*.nc`. It exits if those CONUS Chen files are
+  absent. The NLCD source grid starts at 25.0°N, so the crop is 300 rows — 24
+  rows short of the 324-row target grid and cannot reach the documented 24.0°N
+  southern bound.
+
+Scope is the Southeast US pilot (bbox lon −95..−74, lat 24..37.5). The full-CONUS
+version is the same method plus the boreal drop-list of §12.5/§11c, which is
+inert in SEUS (see 13.3).
 
 Produces a harmonized land-use timeseries that carries the **NLCD-derived
 historical state** and applies the **Chen2022 scenario trend**, for
-`PCT_NATVEG` and `PCT_NAT_PFT` only. Everything below follows from §10–§12 and
-the two source papers (LUH2-style delta; Chen2022 §1.4 area calibration =
-additive delta; Chen2020 §2.3 marched relative change).
+`PCT_NATVEG` and `PCT_NAT_PFT` only (the ELM product additionally writes
+`HARVEST_*` / `GRAZING` and keeps `PCT_NATVEG` static — see 13.9). Everything
+below follows from §10–§12 and the two source papers (LUH2-style delta;
+Chen2022 §1.4 area calibration = additive delta; Chen2020 §2.3 marched relative
+change).
 
 ---
 
@@ -44,6 +61,11 @@ inheriting Chen's decadal transient, and it uses the full observational record
   column enters (§12.4; Chen's urban effect is carried implicitly as natveg
   loss — 13.7 note).
 - SEUS: crop both to the bbox before processing.
+
+**As implemented.** `--build-timeseries` does not use these two CONUS files. It
+reads the target ELM `landuse.timeseries` (anchor + static land-unit columns,
+324×504) and `outputs/interim/chen_targetgrid_<SSP>_2015-2100_1_24deg.nc` from
+`01 --like <target>`. The quantities (`p(j)`, groups, formula) are the same.
 
 ---
 
@@ -201,7 +223,7 @@ method's thorniest branch is empty here.
 
 ## 13.9 Output
 
-- File: `outputs/processed/harmonized_SEUS_SSP1_RCP19_1850-2100_1_24deg.nc`
+- Spec file: `outputs/processed/harmonized_SEUS_SSP1_RCP19_1850-2100_1_24deg.nc`
   - grid: SEUS-cropped (bbox lon −95..−74, lat 24..37.5), lat ascending.
   - `PCT_NATVEG(time,lat,lon)`, `PCT_NAT_PFT(time,natpft,lat,lon)`.
   - `time`: **annual 1850..2100** — 1850..2023 = NLCD observed (unchanged),
@@ -214,6 +236,20 @@ method's thorniest branch is empty here.
   1. budget residual map — `Σ_g ΔP_ch,g  −  Σ_g ΔP_harm,g` per cell per year (≈0 expected).
   2. per-group harmonized trajectory 2023→2100 vs NLCD-2023 and Chen.
   3. before/after composition bars at a few sample cells (pine-belt, cropland, mixed).
+
+**As implemented.**
+
+- Standalone: `outputs/processed/harmonized_SEUS_<SSP>_<hist-start>-2100_1_24deg.nc`.
+  `--hist-start` defaults to **2024**, not 1850. Not the maintained path (see Status).
+- ELM forcing: `outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc`
+  - grid 324×504 (`lsmlat`/`lsmlon`), copied from the target historical file.
+  - static land-unit columns copied verbatim (`PCT_NATVEG` included).
+  - time-varying 2024–2100: `PCT_NAT_PFT`, `HARVEST_*`×5, `GRAZING`.
+  - natveg=0 cells: `PFT0 (bare) = 100` (ELM convention), not all-zero composition.
+- Diagnostics written:
+  - `outputs/interim/harmonize_seus_diag_<SSP>.npz`
+  - `outputs/figures/fig_harmonize_seus_diag_<SSP>.png` (`scripts/analysis/03_harmonize_seus_diag.py`)
+  - `outputs/figures/fig_harmonize_seus_scenario_compare.png` (`scripts/analysis/06_harmonize_seus_compare.py`; SSP1/2/4/5)
 
 ---
 
@@ -243,24 +279,27 @@ method's thorniest branch is empty here.
 | 5 | PFT6 south-FL | **force 0** | keep |
 | 6 | non-SEUS cells | **omit (SEUS subgrid file)** | full grid, NLCD passthrough |
 
+`--hist-start` in `02` defaults to 2024 (the alt of row 4), not 1850. The ELM
+product is 2024–2100 only; historical 1850–2023 stays in the target file.
+
 ---
 
-## 13.12 Implementation sketch
+## 13.12 Implementation
 
 ```
-scripts/40_harmonize_seus.py
-  load NLCD (2023 slice + full history) + Chen SSP1 (native years) on SEUS bbox
-  p_nl(j)   = NATVEG_nl * PFT_nl(j)/100                      # anchor 2023, % of cell
-  p_ch_native(j, t_native) = NATVEG_ch(t)*PFT_ch(j,t)/100
-  p_ch(j, t) = linear-interp p_ch_native to annual 2020..2100  # 13.1/13.2
-  P_nl_g, P_ch_g(t) = group sums
-  w_nl(j)  = p_nl(j)/P_nl_g       (per group; fallback flag where P_nl_g==0)
-  P_harm_g[2023] = P_nl_g
-  for t in 2024..2100:                                        # march annually, per 13.5
-      for g: apply seed/additive/multiplicative branch
-  for t: p_harm(j,t) = P_harm_g[t]*w_nl(j)  (fallback to Chen split if seeded)
-  recover PCT_NATVEG, PCT_NAT_PFT (13.7); zero boreal+PFT6
-  prepend NLCD annual 1850..2023 (unchanged)
-  write nc + run validation (13.10) + diagnostics (13.9)
-jobs/submit_harmonize_seus.sbatch   # -p hpcl-cli185 -q hpcl-cli185 --mem=32g
+scripts/02_harmonize_seus.py
+  --build-timeseries --scenario <SSP>     # ELM forcing (maintained)
+  [--scenario <SSP>]                      # standalone diagnostic (not maintained)
+
+  Stage A: §13 group-level min-footprint march + NLCD-frozen re-split
+           (--build-timeseries: natveg=0 → PFT0=100; Crop group is [15], PFT 16 force-zeroed)
+  Stage B: LUH2 harvest downscale (timeseries mode only)
+  Stage C: assemble target-schema landuse.timeseries (timeseries mode only)
+
+jobs/submit_chen_targetgrid.sbatch         # 01 --like <target>, 4 SSPs
+jobs/submit_chen_targetgrid_ssp370.sbatch  # same, SSP3_RCP70 only
+jobs/submit_landuse_future.sbatch          # 02 --build-timeseries, 4 SSPs; --mem=64g
+jobs/submit_landuse_future_ssp370.sbatch   # same, SSP3_RCP70 only
+jobs/submit_harmonize_seus.sbatch          # standalone 02; --mem=48g; not the forcing path
+jobs/submit_harmonize_regen.sbatch         # standalone 4 SSPs + analysis/03 + analysis/06
 ```

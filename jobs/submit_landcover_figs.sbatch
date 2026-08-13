@@ -23,7 +23,7 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export PYTHONPATH="${PROJECT_ROOT}/src"
 cd "${PROJECT_ROOT}"
 
-$PY scripts/23_landcover_figures.py \
+$PY scripts/analysis/23_landcover_figures.py \
 
 
 echo "done"

@@ -16,5 +16,5 @@ PROJECT_ROOT=/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export PYTHONPATH="${PROJECT_ROOT}/src"
 cd "${PROJECT_ROOT}"
-$PY scripts/34_elmpft_dominant_pft_maps.py
+$PY scripts/analysis/34_elmpft_dominant_pft_maps.py
 echo "done"

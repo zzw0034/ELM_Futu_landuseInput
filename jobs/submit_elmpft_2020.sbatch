@@ -23,7 +23,7 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export PYTHONPATH="${PROJECT_ROOT}/src"
 cd "${PROJECT_ROOT}"
 
-$PY scripts/32_elmpft_2020.py
+$PY scripts/analysis/32_elmpft_2020.py
 
 
 echo "done"

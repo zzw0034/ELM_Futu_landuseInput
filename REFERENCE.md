@@ -40,35 +40,38 @@ src/elm_landuse/
   chen_classes.py               20-class names + Chen→ELM mapping (17 PFTs + 4 special cols)
   raster_io.py                  locate .tifs, read subsets by lon/lat bbox
   aggregate.py                  per-class fractional aggregation onto a target lat/lon grid
+  common_legend.py              10-class common legend + NLCD/Chen LUTs (§10)
 
 scripts/
-  01_chen2022_to_elm_landuse.py CLI: crop → aggregate → write multi-year ELM NetCDF
-  plot_elm_landuse_maps.py      quick-look maps of an output NetCDF
-  plot_area_timeseries.py       total area per ELM column vs year (transient files)
-  plot_seus_bbox.py             US map with the target bbox drawn on it (needs cartopy, see §6)
+  01_chen2022_to_elm_landuse.py Chen 1 km → ELM-PFT NetCDF (`--like` copies a target grid)
+  02_harmonize_seus.py          §13 harmonizer; ELM forcing = `--build-timeseries`
+  analysis/                     diagnostics, comparisons, figures (03–10, 20–23, 30–34, 50–55)
 
 jobs/
-  submit_landuse.sbatch         SLURM driver for Pathfinder
+  submit_landuse.sbatch              Chen → CONUS 1/24° (comparison product)
+  submit_chen_targetgrid.sbatch      Chen → target SEUS grid (4 SSPs)
+  submit_chen_targetgrid_ssp370.sbatch  same, SSP3_RCP70 only
+  submit_landuse_future.sbatch       02 --build-timeseries (4 SSPs)
+  submit_landuse_future_ssp370.sbatch   same, SSP3_RCP70 only
+  submit_*.sbatch                    matching analysis/figure drivers
 
 outputs/
-  processed/                    the deliverable: ELM-PFT-format land use at 1/24°
-  interim/                      everything else generated along the way
-  figures/                      quick-look figures
+  processed/                    deliverables (Chen CONUS files + ELM landuse.timeseries)
+  interim/                      target-grid Chen files, diag npz, cached tables
+  figures/                      QA and comparison figures
   logs/                         SLURM stdout/stderr
 ```
 
-There is no `pyproject.toml` and the package is not installed — `src/` must be on `PYTHONPATH` (see §6). `plot_area_timeseries.py` is standalone and does not import `elm_landuse`.
+There is no `pyproject.toml` and the package is not installed — `src/` must be on `PYTHONPATH` (see §6). Plot/analysis scripts live in `scripts/analysis/`; `plot_area_timeseries.py` is standalone and does not import `elm_landuse`.
 
 **Directory rule**: `data/` is inputs only — nothing under it is ever written by this code. Everything generated goes under `outputs/`, so the whole tree can be deleted and rebuilt from `data/external/` + `scripts/`.
 
 **interim vs processed**: the boundary is *"is this the thing we set out to produce?"*
 
-- `processed/` — the project deliverable: Chen2022 converted to the ELM PFT classification at the production config, i.e. **1/24°, full year series**. This is exactly what `01_chen2022_to_elm_landuse.py` writes; no further conversion step exists or is needed.
-- `interim/` — everything else the pipeline emits: exploratory or coarser runs (e.g. SEUS 0.5°), partial-year demos, and any cached intermediates.
+- `processed/` — (1) Chen2022 converted to the ELM PFT classification at 1/24° (`01`); (2) the ELM-readable SEUS `landuse.timeseries` 2024–2100 files (`02 --build-timeseries`). See `FUTURE_LANDUSE_TIMESERIES.md`.
+- `interim/` — target-grid Chen files, diagnostic npz, native-resolution counts, and other intermediates.
 
-The 1/24° production runs to date are CONUS (`jobs/submit_landuse.sbatch` defaults to it); a 1/24° SEUS run is equally a deliverable.
-
-Scope: this project stops at the ELM PFT land-use file. Building a `landuse.timeseries_*.nc` / `surfdata_*.nc` from it is **out of scope** — see §5.
+The Chen CONUS 1/24° runs (`jobs/submit_landuse.sbatch`) are the comparison product used in §10–§12. The ELM forcing path re-aggregates Chen onto the **target** `landuse.timeseries` grid (`01 --like <target>`), then harmonizes (`02 --build-timeseries`). Do not crop the CONUS Chen file onto the target grid — the grids differ by a half-cell offset and 1° of southern extent (`FUTURE_LANDUSE_TIMESERIES.md` §7).
 
 ---
 
@@ -140,9 +143,9 @@ Dimensions: `time` (years), `natpft` (17), `lat`, `lon`
 
 All PCT fields: `float32`, range `[0, 100]`, zlib-compressed (level 4). Latitude is ascending in the file.
 
-This is the ELM PFT classification (17 natural PFTs in `PCT_NAT_PFT`, named in `pft_name`) on a regular lat/lon grid. **That is where this project stops.**
+This is the Chen-on-grid **intermediate** (17 natural PFTs in `PCT_NAT_PFT`, named in `pft_name`) on a regular lat/lon grid. ELM cannot read it. The ELM-readable product is `landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc` from `scripts/02_harmonize_seus.py --build-timeseries` — see `FUTURE_LANDUSE_TIMESERIES.md`.
 
-> **Not an ELM input file.** ELM cannot read this directly, and making it readable is out of scope. For the record, the deltas against a real `landuse.timeseries_*.nc` (compared against `/projects/hpcl-cli185/proj-shared/zw5/software/mksurfdata_map/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260415.nc`) are:
+> **Not an ELM input file.** The deltas against a real `landuse.timeseries_*.nc` (compared against `/projects/hpcl-cli185/proj-shared/zw5/software/mksurfdata_map/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260415.nc`) are:
 >
 > - dims are `lat`/`lon`, not `lsmlat`/`lsmlon`; no 2-D `LONGXY`/`LATIXY`/`AREA`, no `LANDFRAC_PFT`/`PFTDATA_MASK`
 > - `PCT_URBAN` is a single total; ELM wants it split over `numurbl`=3 density classes
@@ -178,7 +181,7 @@ export PYTHONPATH=$PWD/src        # from the project root
 
 Notes:
 - `PYTHONPATH` is required either way — `elm_landuse` is not installed as a package.
-- `cartopy` is **not** in the env, so `plot_seus_bbox.py` exits with `need library cartopy`. To enable it:
+- `cartopy` is **not** in the env, so `scripts/analysis/plot_seus_bbox.py` exits with `need library cartopy`. To enable it:
   `conda install -n make_surfdata_pf -c conda-forge cartopy`
 - The GDAL CLI tools (`gdalinfo`, …) live in the env's `bin/`. Run them with the env activated, otherwise PROJ cannot find its database and warns `proj_create_from_database: Open of …/share/proj failed`. The python path (rasterio/pyproj) resolves PROJ correctly without activation.
 
@@ -204,7 +207,7 @@ $PY scripts/01_chen2022_to_elm_landuse.py \
   --bbox -95 24 -74 37.5 --resolution 0.5 \
   --out outputs/interim/chen2022_landuse_SEUS_SSP2_RCP45_0p5deg.nc
 
-# Production: CONUS 1/24° on the NLCD grid (§4)
+# Comparison product: CONUS 1/24° on the NLCD grid (§4)
 # (~25 s per year → ~8 min for 18 years; use the batch job)
 REF=/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/s4_LUToutput_pft/scr_out/elmpft_from_nlcd_frac_pred_1850-2023_1_24deg.nc
 $PY scripts/01_chen2022_to_elm_landuse.py \
@@ -212,28 +215,39 @@ $PY scripts/01_chen2022_to_elm_landuse.py \
   --extra-years 2020:2100:5 \
   --like "$REF" \
   --out outputs/processed/chen2022_landuse_CONUS_SSP2_RCP45_2015-2100_1_24deg.nc
+
+# ELM forcing: Chen on the target landuse.timeseries grid, then harmonize
+TGT=/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc
+$PY scripts/01_chen2022_to_elm_landuse.py \
+  --scenario SSP2_RCP45 --years 2015 \
+  --extra-years 2020:2100:5 \
+  --like "$TGT" \
+  --out outputs/interim/chen_targetgrid_SSP2_RCP45_2015-2100_1_24deg.nc
+$PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
 ```
 
 Quick-look QA figures — maps of one time slice, and total area per column vs year:
 
 ```bash
-$PY scripts/plot_elm_landuse_maps.py \
+$PY scripts/analysis/plot_elm_landuse_maps.py \
   --in  outputs/interim/chen2022_landuse_SEUS_SSP2_RCP45_0p5deg.nc \
   --out outputs/figures/chen2022_landuse_SEUS_SSP2_RCP45_0p5deg.png
 
-$PY scripts/plot_area_timeseries.py \
+$PY scripts/analysis/plot_area_timeseries.py \
   --in  outputs/interim/chen2022_landuse_SEUS_SSP2_RCP45_0p5deg.nc \
   --out outputs/figures/area_timeseries_SEUS_SSP2_RCP45_0p5deg.png
 ```
 
-SLURM batch job:
+SLURM batch jobs:
 
 ```bash
-sbatch jobs/submit_landuse.sbatch
+sbatch jobs/submit_landuse.sbatch              # Chen CONUS comparison files
+sbatch jobs/submit_chen_targetgrid.sbatch      # Chen → target grid (4 SSPs)
+sbatch jobs/submit_landuse_future.sbatch       # 02 --build-timeseries (4 SSPs)
 squeue -u $USER
 ```
 
-Edit the CONFIG block (`BBOX`, `REGION_TAG`, `RESOLUTION`, `RES_TAG`, `SCENARIO`, `EXTRA_YEARS`, `YEARS_TAG`) at the top of the sbatch script before submitting. The `*_TAG` values only build the output filenames and are not validated — keep them in sync with the values they describe.
+Edit the CONFIG block of `submit_landuse.sbatch` (`REGION_TAG`, `RES_TAG`, `SCENARIO`, `EXTRA_YEARS`, `YEARS_TAG`) before submitting a Chen CONUS run. The `*_TAG` values only build the output filenames and are not validated — keep them in sync with the values they describe. For the ELM forcing jobs, scenarios are listed in the sbatch loop; do not add SSP3_RCP70 to the 4-SSP loops (that would overwrite already-verified files — use the `*_ssp370.sbatch` scripts).
 
 The job calls the env's python by absolute path, so no conda state has to be set up or torn down around `sbatch`, and all paths in it are absolute, so it can be submitted from any directory.
 
@@ -284,11 +298,11 @@ pixel_area` is exact and neither is resampled to produce the statistics.
 ### Code
 
 ```
-src/elm_landuse/common_legend.py     10-class common legend + NLCD/Chen LUTs
-scripts/20_landcover_native_stats.py native-resolution pixel counts -> JSON
-scripts/21_landcover_map_data.py     1200 m display grid for the maps -> NPZ
-scripts/22_landcover_tables.py       area tables -> CSV/TXT
-scripts/23_landcover_figures.py      the five figures
+src/elm_landuse/common_legend.py              10-class common legend + NLCD/Chen LUTs
+scripts/analysis/20_landcover_native_stats.py native-resolution pixel counts -> JSON
+scripts/analysis/21_landcover_map_data.py     1200 m display grid for the maps -> NPZ
+scripts/analysis/22_landcover_tables.py       area tables -> CSV/TXT
+scripts/analysis/23_landcover_figures.py      the five figures
 jobs/submit_landcover_{stats,mapdata,figs}.sbatch
 ```
 
@@ -399,8 +413,8 @@ filter touches it; the sub-grid class *fractions* are true.
 | Chen2022-derived | `outputs/processed/chen2022_landuse_CONUS_{2015,SSP1_RCP19,SSP2_RCP45,SSP4_RCP60,SSP5_RCP85}_*.nc` (§5) |
 
 ```
-scripts/30_elmpft_compare.py    tables + elmpft_compare.npz
-scripts/31_elmpft_figures.py    fig6-fig9
+scripts/analysis/30_elmpft_compare.py    tables + elmpft_compare.npz
+scripts/analysis/31_elmpft_figures.py    fig6-fig9
 jobs/submit_elmpft_{compare,figs}.sbatch
 ```
 
@@ -551,7 +565,7 @@ outputs/figures/fig9_elmpft_group_diff_2015.png   where they disagree
 
 ### 11a. The 2020 slice on its own
 
-`scripts/32_elmpft_2020.py` (job `jobs/submit_elmpft_2020.sbatch`) re-cuts §11 at
+`scripts/analysis/32_elmpft_2020.py` (job `jobs/submit_elmpft_2020.sbatch`) re-cuts §11 at
 2020 only, reading the cached `elmpft_compare.npz` — run script 30 first.
 
 Note `chen2022_landuse_CONUS_2015_1_24deg.nc` carries **2015 only** and cannot
@@ -606,7 +620,7 @@ outputs/figures/fig13_elmpft_group_diff_2020.png  where they disagree
 
 ### 11b. Both years side by side, and the 2015→2020 signal
 
-`scripts/33_elmpft_maps_2015_2020.py` (job `jobs/submit_elmpft_maps1520.sbatch`),
+`scripts/analysis/33_elmpft_maps_2015_2020.py` (job `jobs/submit_elmpft_maps1520.sbatch`),
 reading the cached `elmpft_compare.npz`.
 
 **fig14** — dominant functional group within natveg, (NLCD | Chen) × (2015 | 2020).
@@ -671,7 +685,7 @@ outputs/figures/fig15_elmpft_change_2015_2020.png
 
 ### 11c. Dominant-PFT visual check (fig16)
 
-`scripts/34_elmpft_dominant_pft_maps.py` (job `jobs/submit_elmpft_dompft.sbatch`)
+`scripts/analysis/34_elmpft_dominant_pft_maps.py` (job `jobs/submit_elmpft_dompft.sbatch`)
 — dominant natural PFT, (NLCD | Chen) × (2015 | 2020), for eyeballing.
 
 **A plain `argmax` over natpft would lie here.** Both products carry a 50/50
@@ -882,11 +896,11 @@ lead. That is not a reason to prefer the state swap — the swap is strictly wor
 
 | claim | where |
 |---|---|
-| raw land-cover gap, native resolution | §10, `scripts/20`–`23`, `fig1`–`fig5` |
-| ELM-PFT gap, shared grid | §11, `scripts/30`–`31`, `fig6`–`fig9` |
-| 2020 slice, gap vs scenario spread | §11a, `scripts/32`, `fig10`–`fig13` |
-| product gap vs 5-year signal; the deltas | §11b, `scripts/33`, `fig14`–`fig15` |
-| the tie artifacts, mapped | §11c, `scripts/34`, `fig16` |
+| raw land-cover gap, native resolution | §10, `scripts/analysis/20`–`23`, `fig1`–`fig5` |
+| ELM-PFT gap, shared grid | §11, `scripts/analysis/30`–`31`, `fig6`–`fig9` |
+| 2020 slice, gap vs scenario spread | §11a, `scripts/analysis/32`, `fig10`–`fig13` |
+| product gap vs 5-year signal; the deltas | §11b, `scripts/analysis/33`, `fig14`–`fig15` |
+| the tie artifacts, mapped | §11c, `scripts/analysis/34`, `fig16` |
 | all numbers | `outputs/interim/elmpft_{compare_tables,2020_tables,change_2015_2020}.txt` |
 
 ---
@@ -894,11 +908,12 @@ lead. That is not a reason to prefer the state swap — the swap is strictly wor
 ## 13. Harmonization method — decided (SEUS pilot)
 
 §12 was an inventory ("input to a decision, not a decision"). This section
-records the **method chosen** and resolves §12.8. The full implementable spec —
-inputs, formulas, seed rules, outputs, validation — is in
-`HARMONIZATION_SEUS_PILOT.md`. Pilot region = SEUS (bbox lon −95..−74,
-lat 24..37.5); full CONUS is the same method plus the boreal drop-list of §12.5,
-which is inert in SEUS.
+records the **method chosen** and resolves §12.8. The formula spec is in
+`HARMONIZATION_SEUS_PILOT.md`. Implementation: `scripts/02_harmonize_seus.py`.
+ELM forcing is `--build-timeseries` (`FUTURE_LANDUSE_TIMESERIES.md`); the
+default/standalone mode is diagnostic only and is not maintained. Pilot region
+= SEUS (bbox lon −95..−74, lat 24..37.5); full CONUS is the same method plus
+the boreal drop-list of §12.5, which is inert in SEUS.
 
 **Principle.** Historical / near-term state from the NLCD base map; future change
 from Chen; joined by **delta harmonization anchored at 2023** (NLCD's last observed year). Only Chen's
@@ -967,17 +982,17 @@ rather than dumping it on whichever single PFT Chen happened to use.
 
 ### 13a. New comparison evidence (post-PFT3-fix, SSP1-RCP1.9)
 
-Diagnostics generated for the harmonization decisions above (`scripts/50–55`):
+Diagnostics generated for the harmonization decisions above (`scripts/analysis/50–55`):
 
 ```
-figures/fig_natveg_diff_nlcd_vs_chen_ssp1.png      PCT_NATVEG level diff: +2.1 pp, one-directional, city/coast
-figures/fig_natpft_dissimilarity_ssp1.png          composition diff: group 21% vs raw-17 37% of the natveg column
-figures/fig_natpft_groupdiff_ssp1_2015.png         per functional group, Chen−NLCD
-figures/fig_natpft_perpft_diff_ssp1_2020.png       per-PFT diff, all 17
-figures/fig_natpft_presence_ssp1_2020.png          per-PFT has/has-not, 4-class (CONUS)
-figures/fig_natpft_presence_SEUS_ssp1_2020.png     per-PFT has/has-not (SEUS)
-figures/fig_nlcdonly_correspondence_ssp1_2020.png  NLCD-only cells: what Chen has instead (PFT 7/9/13)
-interim/natpft_{diff,types,presence,...}_*_ssp1.txt
+outputs/figures/fig_natveg_diff_nlcd_vs_chen_ssp1.png      PCT_NATVEG level diff: +2.1 pp, one-directional, city/coast
+outputs/figures/fig_natpft_dissimilarity_ssp1.png          composition diff: group 21% vs raw-17 37% of the natveg column
+outputs/figures/fig_natpft_groupdiff_ssp1_2015.png         per functional group, Chen−NLCD
+outputs/figures/fig_natpft_perpft_diff_ssp1_2020.png       per-PFT diff, all 17
+outputs/figures/fig_natpft_presence_ssp1_2020.png          per-PFT has/has-not, 4-class (CONUS)
+outputs/figures/fig_natpft_presence_SEUS_ssp1_2020.png     per-PFT has/has-not (SEUS)
+outputs/figures/fig_nlcdonly_correspondence_ssp1_2020.png  NLCD-only cells: what Chen has instead (PFT 7/9/13)
+outputs/interim/natpft_{diff,types,presence,...}_*_ssp1.txt
 ```
 
 What they establish, in one line each:

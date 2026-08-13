@@ -15,4 +15,4 @@ set -euo pipefail
 PROJECT_ROOT=/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 cd "$PROJECT_ROOT"
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
-$PY scripts/50_natveg_diff.py
+$PY scripts/analysis/50_natveg_diff.py

@@ -49,7 +49,7 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 | natveg | **静态(option A)** | ELM landuse.timeseries schema 固定 land-unit,只让 `PCT_NAT_PFT` 时变;mksurfdata 源码证实(natveg 只写一次)。城市化(natveg 收缩)在此 schema 结构性无法表达——被丢的量:SEUS 2020→2100 均值仅 −2.8% of cell,集中在 ~5% 城市边缘格。保留的组成变化(grass→tree)是丢弃量的 ~6×,方向正确。 |
 | natveg=0 格点 | **PFT0 (bare) = 100** | 对齐目标约定;组成在 natveg=0 处对 ELM 无意义 |
 | 农田 | 保留(= PFT15 在 natveg 内,`PCT_CROP≡0`) | 农田变化是组成变化,不是被忽略;只有 urban 扩张被忽略 |
-| harvest 权重 | **我们逐年 harmonized 森林 × 目标静态 natveg** | 和 ELM 实际跑的(冻结)森林自洽;与"用 Chen 逐年真实 natveg"实测只差 ~1.3%,可忽略 |
+| harvest 权重 | **逐年 harmonized 森林占比 × 逐年谐调 natveg** | 下采样与 LUT 分母都用 annual natveg（对齐 s4_2）；文件里的 `PCT_NATVEG` 仍是目标静态列，所以 ELM 收回的采伐面积带 `natveg_static/natveg_annual` 因子（§11.6，约 +2%） |
 | harvest 情景 | 与土地利用情景**配对**(SSP2 land use ↔ ssp2rcp45 harvest) | 一个 forcing 内自洽 |
 | GRAZING | 沿用目标 **2023** 值 | s4_2 里 GRAZING 是常数;持久化历史末值最简单一致 |
 | 输出 dtype | float64 | 与目标一致 |
@@ -122,6 +122,8 @@ $PY scripts/01_chen2022_to_elm_landuse.py --scenario SSP2_RCP45 --years 2015 \
 #                           仅 SSP3_RCP70:jobs/submit_landuse_future_ssp370.sbatch）
 $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
 ```
+不带 `--build-timeseries` 的 `02` 是 standalone 诊断路径，输入缺失时会直接退出，不是维护中的 ELM 强迫入口。`jobs/submit_harmonize_seus.sbatch` / `submit_harmonize_regen.sbatch` 走的就是这条，不要当成生产链。
+
 （Slurm:`-p hpcl-cli185 -q hpcl-cli185 -A hpcl-cli185 --mem=64g`。）
 
 ---
@@ -175,6 +177,14 @@ $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
   —— SSP3_RCP70 单情景版。**不要**把 SSP3_RCP70 加进上面两个循环脚本:那会重算并
   覆盖已验证的 4 套 interim/processed 文件。
 - `jobs/download_luh2_ssp370.sbatch` —— 取 LUH2 v2f ssp370 harvest(见 §9.4)。
+- 谐调诊断(读 interim diag npz,不是交付 .nc):
+  - `scripts/analysis/03_harmonize_seus_diag.py` —— 单情景轨迹/残差/样点组成
+    (`jobs/submit_diag.sbatch`, `jobs/submit_harmonize_regen.sbatch`)。
+  - `scripts/analysis/04_chen_spatial_years.py` / `05_chen_change_map.py` —— Chen
+    空间年切片与 2020→2100 变化(`jobs/submit_chen_spatial.sbatch`,
+    `jobs/submit_chen_change.sbatch`)。
+  - `scripts/analysis/06_harmonize_seus_compare.py` —— 四情景 diag 对比,覆盖
+    SSP1/2/**4**/5(`jobs/submit_harmonize_compare.sbatch`)。
 - 成品对比与采伐诊断(见 §11,均配 `jobs/submit_*.sbatch`,用 `-p serial -q normal`):
   - `scripts/analysis/07_scenario_compare_final.py` —— 读**交付的 .nc**做四情景对比
     (`--compute` 算 npz / `--plot` 只重画)。注意与 `06_harmonize_seus_compare.py`
@@ -184,6 +194,9 @@ $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
   - `scripts/analysis/09_luh2_source_look.py` —— LUH2 源数据原貌(harvest + states)。
   - `scripts/analysis/10_harvest_time_index_check.py` —— k=−1 索引验证、2050 台阶、
     2100 断崖。
+- 一次性检查:`check_anchor2023`、`check_natveg_zero`、`check_zero_cause`、
+  `decomp_change`、`harvest_weight_diff`、`inspect_target`、`area_ours_vs_source`、
+  `verify_pft3`(均在 `scripts/analysis/`,各有对应 `jobs/submit_*.sbatch`)。
 - `HARMONIZATION_SEUS_PILOT.md`、`REFERENCE.md`(§13 方法与证据)。
 - 采伐:`s4_2_donwscale_LUH2harvest.py`;工作流:`.../Make_surface_data/my_workflow_Make_surface_data.md`。
 

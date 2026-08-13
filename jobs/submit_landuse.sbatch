@@ -64,7 +64,7 @@ $PY scripts/01_chen2022_to_elm_landuse.py \
     --like "$GRID_LIKE" \
     --out "$OUT_HIST"
 
-$PY scripts/plot_elm_landuse_maps.py \
+$PY scripts/analysis/plot_elm_landuse_maps.py \
     --in "$OUT_HIST" \
     --out "outputs/figures/$(basename "${OUT_HIST%.nc}").png"
 
@@ -79,11 +79,11 @@ for SCENARIO in "${SCENARIOS[@]}"; do
         --like "$GRID_LIKE" \
         --out "$OUT_SSP"
 
-    $PY scripts/plot_elm_landuse_maps.py \
+    $PY scripts/analysis/plot_elm_landuse_maps.py \
         --in "$OUT_SSP" \
         --out "outputs/figures/$(basename "${OUT_SSP%.nc}").png"
 
-    $PY scripts/plot_area_timeseries.py \
+    $PY scripts/analysis/plot_area_timeseries.py \
         --in "$OUT_SSP" \
         --out "outputs/figures/area_timeseries_${REGION_TAG}_${SCENARIO}_${YEARS_TAG}_${RES_TAG}.png"
 done

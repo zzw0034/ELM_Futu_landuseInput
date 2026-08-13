@@ -15,4 +15,4 @@ set -euo pipefail
 unset SLURM_EXPORT_ENV
 
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
-$PY /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/scripts/compare/compare_pct_nat_pft_seus_2020.py
+$PY /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/scripts/analysis/compare/compare_pct_nat_pft_seus_2020.py

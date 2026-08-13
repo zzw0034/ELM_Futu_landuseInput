@@ -12,4 +12,4 @@
 #SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/logs/%x_%j.err
 set -euo pipefail
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
-$PY /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/scripts/verify_pft3.py
+$PY /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/scripts/analysis/verify_pft3.py
