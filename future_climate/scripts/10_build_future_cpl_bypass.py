@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import netCDF4 as nc
@@ -62,6 +64,22 @@ OCEAN_SENTINEL_RAW = {
     "TBOT": 22725, "PSRF": -23831, "QBOT": -14592, "FSDS": -30984,
     "PRECTmms": -32768, "WIND": -14600, "FLDS": 14924,
 }
+
+# day-of-year (0-indexed) at the start of each month, fixed NOLEAP lengths
+# (Feb pegged to 28, matching the source data with Feb 29 stripped).
+_CUM_DAYS_NOLEAP = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
+
+def month_start_step(year: int, month: int) -> int:
+    """0-based global DTIME index of (year, month)'s first record.
+
+    Pure arithmetic (dummy year prefix + fixed NOLEAP month lengths), so it
+    doesn't depend on processing order -- lets worker processes write their
+    month's block directly without a running counter or fixed submission
+    order.
+    """
+    return (STEPS_PER_YEAR + (year - Y0) * STEPS_PER_YEAR
+            + _CUM_DAYS_NOLEAP[month - 1] * STEPS_PER_DAY)
 
 
 def add_offset_scale(lo: float, hi: float) -> tuple[float, float]:
@@ -124,6 +142,15 @@ def read_month(scenario: str, var: str, year: int, month: int) -> np.ndarray:
     return raw
 
 
+def process_month(scenario: str, var: str, year: int, month: int,
+                   add_off: float, scale: float, raw_sentinel: int):
+    """Worker: read + pack one month. Runs in a subprocess -- must not touch
+    the (single, main-process-owned) output NetCDF handle."""
+    raw = read_month(scenario, var, year, month)
+    packed = pack_month(raw, add_off, scale, raw_sentinel)
+    return year, month, month_start_step(year, month), packed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", required=True, choices=["ssp119", "ssp245", "ssp370", "ssp585"])
@@ -158,7 +185,13 @@ def main():
     v_lat = ds.createVariable("LATIXY", "f4", ("n",))
     v_lon[:] = lon
     v_lat[:] = lat
-    v_var = ds.createVariable(var, "i2", ("n", "DTIME"), zlib=True, complevel=4, shuffle=True,
+    # No compression: writing this variable was measured CPU-bound at complevel=4
+    # (single core pinned near 100% doing zlib work, not I/O-bound), and the
+    # uncompressed storage budget (~2.9TiB for all 7 vars x 4 scenarios) fits
+    # comfortably within the ~46TB free on /projects/hpcl-cli185 -- see
+    # README_cpl_bypass_future.md Sec.8. Chunking is kept (one chunk per year)
+    # since writes still happen in DTIME-axis slices.
+    v_var = ds.createVariable(var, "i2", ("n", "DTIME"),
                                chunksizes=(NCELL, min(STEPS_PER_YEAR, total_steps)))
     v_var.add_offset = np.float32(add_off)
     v_var.scale_factor = np.float32(scale)
@@ -191,25 +224,33 @@ def main():
                                f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
                                "is identical between the historical and future forcing.")
 
+    # DTIME is pure arithmetic (doesn't depend on the source data at all) --
+    # write it in one shot instead of one nc call per step.
+    v_dtime[:] = (np.arange(1, total_steps + 1) / STEPS_PER_DAY
+                  - 0.5 * (RES_HOURS / 24.0))
+
     # dummy year: sentinel everywhere
-    dummy_block = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
-    v_var[:, 0:STEPS_PER_YEAR] = dummy_block
-    for i in range(STEPS_PER_YEAR):
-        v_dtime[i] = (i + 1) / STEPS_PER_DAY - 0.5 * (RES_HOURS / 24.0)
+    v_var[:, 0:STEPS_PER_YEAR] = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
 
-    step = STEPS_PER_YEAR  # global step counter (0-based, continues across the dummy year)
-    for year in range(Y0, Y1 + 1):
-        for month in range(1, 13):
-            raw = read_month(args.scenario, var, year, month)  # (ntime, NLAT, NLON), NOLEAP-trimmed
-            packed = pack_month(raw, add_off, scale, raw_sentinel)  # (ntime, NCELL)
+    nworkers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
+    tasks = [(y, m) for y in range(Y0, Y1 + 1) for m in range(1, 13)]
+    print(f"[{var}/{args.scenario}] {len(tasks)} months to process with {nworkers} worker processes")
+
+    done = 0
+    with ProcessPoolExecutor(max_workers=nworkers) as pool:
+        futures = [pool.submit(process_month, args.scenario, var, y, m, add_off, scale, raw_sentinel)
+                   for y, m in tasks]
+        # Workers only read+pack; only this (main) process ever writes to ds,
+        # so out-of-order completion is safe -- each block's position comes
+        # from month_start_step, not from submission/completion order.
+        for fut in as_completed(futures):
+            year, month, start, packed = fut.result()
             ntime = packed.shape[0]
-            v_var[:, step:step + ntime] = packed.T
-            for i in range(ntime):
-                v_dtime[step + i] = (step + i + 1) / STEPS_PER_DAY - 0.5 * (RES_HOURS / 24.0)
-            step += ntime
-        print(f"[{var}/{args.scenario}] finished year {year} (step={step})")
+            v_var[:, start:start + ntime] = packed.T
+            done += 1
+            if done % 12 == 0 or done == len(tasks):
+                print(f"[{var}/{args.scenario}] {done}/{len(tasks)} months written (last: {year}-{month:02d})")
 
-    assert step == total_steps, f"step counter {step} != total_steps {total_steps}"
     ds.close()
     print(f"[{var}/{args.scenario}] done: {out_path}")
 
