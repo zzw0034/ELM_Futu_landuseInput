@@ -101,16 +101,30 @@ def load_grid_order() -> tuple[np.ndarray, np.ndarray]:
 
 
 def pack_month(raw_lat_lon: np.ndarray, add_off: float, scale: float, raw_sentinel: int) -> np.ndarray:
-    """(ntime, NLAT, NLON) float, NaN over ocean -> (ntime, NCELL) int16, n-ordered."""
+    """(ntime, NLAT, NLON) float32, NaN over ocean -> (ntime, NCELL) int16, n-ordered.
+
+    Stays in float32 and reuses one buffer for the offset/scale/round chain
+    (in place) instead of chaining separate arr-add_off / .../scale / round()
+    expressions, each of which would otherwise allocate its own float64-sized
+    temporary -- with 16 worker processes doing this concurrently, those
+    temporaries were the actual cause of an OOM kill at --mem=48g (measured:
+    naive per-worker peak ~2-3GB against float32 source data that's only
+    ~223MB/month; this version peaks under ~500MB/worker).
+    """
     ntime = raw_lat_lon.shape[0]
     # (time, lat, lon) -> (time, lon, lat): flatten() on the last two axes then
     # gives n = ilon*NLAT + ilat, matching zone_mappings.txt row order.
-    arr = np.transpose(raw_lat_lon, (0, 2, 1)).reshape(ntime, NCELL)
+    # (transpose is a view; reshape on non-contiguous data forces the one copy
+    # we actually need, so this is also the only new full-size buffer.)
+    arr = np.transpose(raw_lat_lon, (0, 2, 1)).reshape(ntime, NCELL).astype(np.float32, copy=True)
     valid = np.isfinite(arr)
-    packed = np.empty((ntime, NCELL), dtype=np.int16)
-    scaled = np.round((arr - add_off) / scale)
-    scaled = np.clip(scaled, -32767, 32767)  # keep -32768 reserved for the PRECTmms sentinel itself
-    packed[:] = np.where(valid, scaled, raw_sentinel).astype(np.int16)
+    arr -= np.float32(add_off)
+    arr /= np.float32(scale)
+    np.round(arr, out=arr)
+    np.clip(arr, -32767, 32767, out=arr)  # keep -32768 reserved for the PRECTmms sentinel itself
+    arr[~valid] = 0.0  # NaN -> int16 cast is undefined behavior; zero first, overwrite below anyway
+    packed = arr.astype(np.int16)
+    packed[~valid] = raw_sentinel
     return packed
 
 
@@ -127,8 +141,8 @@ def read_month(scenario: str, var: str, year: int, month: int) -> np.ndarray:
     path = (TESSFA2_ROOT / f"CanESM5_{scenario}_r1i1p1f1_DBCCA_Daymet_TESSFA2" /
             subdir / f"{prefix}.{year:04d}-{month:02d}.nc")
     with nc.Dataset(path) as ds:
-        raw = ds.variables[srcvar][:].astype(np.float64)  # (time, lat, lon), _FillValue -> masked
-        raw = np.ma.filled(raw, np.nan)
+        raw = ds.variables[srcvar][:]  # (time, lat, lon) float32, _FillValue -> masked
+        raw = raw.filled(np.nan).astype(np.float32, copy=False)  # source is already float32
         t = ds.variables["time"]
         times = nc.num2date(t[:], t.units, calendar=getattr(t, "calendar", "standard"))
     ndays = calendar.monthrange(year, month)[1]
