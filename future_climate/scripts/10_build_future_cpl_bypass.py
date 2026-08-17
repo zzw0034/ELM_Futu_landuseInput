@@ -31,8 +31,11 @@ import numpy as np
 TESSFA2_ROOT = Path("/projects/hpcl-cli185/proj-shared/TESSFA/CanESM5")
 ZONE_MAPPINGS = Path("/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/"
                       "Daymet_ERA5_TESSFA2/zone_mappings.txt")
-OUT_ROOT = Path("/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/"
-                 "Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim")
+OUT_ROOT = Path("/scratch/hpcl-cli185/zw5/future_clim")
+# NOTE: /scratch is subject to periodic purging, unlike /projects. Fine for
+# generating and validating output now; before the actual 2024-2100 future
+# case runs, confirm these files still exist or move them to a durable
+# location under /projects and update metdata_bypass accordingly.
 
 NLON, NLAT = 625, 361
 NCELL = NLON * NLAT
@@ -92,11 +95,17 @@ def load_grid_order() -> tuple[np.ndarray, np.ndarray]:
     """LONGXY(n), LATIXY(n) in the same order as zone_mappings.txt."""
     lon = np.empty(NCELL, dtype=np.float64)
     lat = np.empty(NCELL, dtype=np.float64)
+    n_lines = 0
     with open(ZONE_MAPPINGS) as f:
         for i, line in enumerate(f):
+            if i >= NCELL:
+                raise AssertionError(f"{ZONE_MAPPINGS} has more than {NCELL} rows")
             parts = line.split()
             lon[i] = float(parts[0])
             lat[i] = float(parts[1])
+            n_lines += 1
+    if n_lines != NCELL:
+        raise AssertionError(f"{ZONE_MAPPINGS} has {n_lines} rows, expected {NCELL}")
     return lon, lat
 
 
@@ -180,16 +189,36 @@ def main():
     out_dir = Path(args.out_dir) if args.out_dir else OUT_ROOT / args.scenario
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"DBCCA_Daymet_TESSFA2_{var}_2023-2100_z01.nc"
+    # Write under a .partial name and only rename to the real filename (the
+    # exact name the patched Fortran reader looks for) once everything below
+    # -- all years written, ds.close() succeeded -- has actually happened.
+    # An interrupted run (OOM, walltime, crash) then leaves an unambiguous
+    # .partial file instead of something that looks like a finished,
+    # ready-to-read output at the expected path.
+    tmp_path = out_path.with_suffix(out_path.suffix + ".partial")
 
     print(f"[{var}/{args.scenario}] add_offset={add_off} scale_factor={scale} "
           f"ocean_sentinel_raw={raw_sentinel}")
-    print(f"[{var}/{args.scenario}] writing {out_path}")
+    print(f"[{var}/{args.scenario}] writing {tmp_path} -> {out_path}")
 
     lon, lat = load_grid_order()
     n_years = Y1 - Y0 + 1
     total_steps = STEPS_PER_YEAR + n_years * STEPS_PER_YEAR  # dummy year + real years
 
-    ds = nc.Dataset(out_path, "w", format="NETCDF4")
+    # NETCDF3_64BIT_OFFSET (classic "64-bit offset" format), matching the
+    # historical Daymet_ERA5_TESSFA.4km_*_1980-2023_z01.nc files exactly
+    # (confirmed via `ncdump -k`) -- NOT NetCDF4/HDF5. An earlier NETCDF4 +
+    # chunked version of this script produced a file that read back
+    # corrupted (values outside the physical range) once run at the full
+    # 78-year scale, even after enlarging the HDF5 chunk cache to fit one
+    # full year-chunk (which *did* fix it at the 2-4 year scale tested
+    # before scaling up -- the failure mode only showed up with enough
+    # out-of-order year-chunks in flight to thrash a cache sized for just
+    # one). Classic format has no chunking at all -- writes are direct
+    # positional I/O, same as the Fortran production script
+    # (makezones_reanalysis.f90) that built the historical files -- so this
+    # whole class of bug doesn't apply.
+    ds = nc.Dataset(tmp_path, "w", format="NETCDF3_64BIT_OFFSET")
     ds.createDimension("n", NCELL)
     ds.createDimension("DTIME", total_steps)
     v_dtime = ds.createVariable("DTIME", "f8", ("DTIME",))
@@ -199,26 +228,25 @@ def main():
     v_lat = ds.createVariable("LATIXY", "f4", ("n",))
     v_lon[:] = lon
     v_lat[:] = lat
-    # No compression: writing this variable was measured CPU-bound at complevel=4
-    # (single core pinned near 100% doing zlib work, not I/O-bound), and the
-    # uncompressed storage budget (~2.9TiB for all 7 vars x 4 scenarios) fits
-    # comfortably within the ~46TB free on /projects/hpcl-cli185 -- see
-    # README_cpl_bypass_future.md Sec.8. Chunking is kept (one chunk per year)
-    # since writes still happen in DTIME-axis slices.
-    chunk_steps = min(STEPS_PER_YEAR, total_steps)
-    v_var = ds.createVariable(var, "i2", ("n", "DTIME"), chunksizes=(NCELL, chunk_steps))
-    # HDF5's default per-variable chunk cache is a few MB; one chunk here is
-    # a full year, ~1.3GB. Writes land as scattered, out-of-order, partial
-    # (one month at a time) hits within that one chunk -- with the default
-    # cache far smaller than the chunk, each partial write can evict/reload
-    # a chunk mid-year and silently lose an earlier month's data in it
-    # (confirmed empirically: reproduced 0 mismatches -> real, non-flaky
-    # mismatches by removing this, then fixed by adding it back). Size the
-    # cache to comfortably hold one full chunk.
-    chunk_bytes = NCELL * chunk_steps * 2
-    v_var.set_var_chunk_cache(size=int(chunk_bytes * 1.5) + (1 << 20), nelems=4133, preemption=0.75)
+    # fill_value=False: classic-format nc_enddef() otherwise pre-writes a
+    # fill value across the FULL declared extent of this variable (~96GiB)
+    # before any real data is written -- confirmed this alone was enough to
+    # make variable creation itself hang past a 15-minute srun timeout with
+    # no output at all. Safe to skip: every DTIME index gets written (dummy
+    # year + all 924 months, contiguous, no gaps), so there's nothing for
+    # the fill value to ever be read back.
+    v_var = ds.createVariable(var, "i2", ("n", "DTIME"), fill_value=False)
     v_var.add_offset = np.float32(add_off)
     v_var.scale_factor = np.float32(scale)
+    # Data assigned to v_var is already packed int16, not physical values --
+    # without this, netCDF4-python's default auto-scale-on-write would
+    # (re-)apply (data-add_offset)/scale_factor to it, since add_offset/
+    # scale_factor attributes are already set at this point. Empirically this
+    # wasn't observed to actually corrupt output in this script's specific
+    # write pattern (many 0/N-mismatch checks passed without it), but that's
+    # implicit, version/library-dependent behavior -- not something to rely
+    # on silently continuing to hold.
+    v_var.set_auto_scale(False)
 
     ds.title = "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing"
     ds.source = (f"CanESM5 {args.scenario} r1i1p1f1, DBCCA bias-corrected/downscaled "
@@ -279,7 +307,34 @@ def main():
         in_flight.add(pool.submit(process_month, args.scenario, var, y, m, add_off, scale, raw_sentinel))
         return True
 
-    done = 0
+    # Writes are batched per-year (12 months at a time), not per-month.
+    # Measured: a classic-format (n, DTIME) variable's DTIME axis is the
+    # fastest-varying dimension, so a write covering a time range touches
+    # ALL 225,625 "n" rows once per write call, non-contiguously. Timed a
+    # single month-write at ~76-99s -- ~1.4MB/s effective, far below any
+    # plausible storage bandwidth, i.e. latency/overhead-bound on those
+    # 225,625 separate strided row-touches, not bandwidth-bound. Batching 12
+    # months into one write touches each row once instead of twelve times;
+    # measured a clean ~12x speedup (80s for a full year vs. ~920-1190s for
+    # 12 separate month-writes covering the same data). Tasks are submitted
+    # in (year, month) order and the window is a modest multiple of worker
+    # count, so only a handful of years are ever "in progress" at once --
+    # buffering incomplete years costs at most a few GB, not the whole file.
+    year_buf: dict[int, dict[int, np.ndarray]] = {}
+    done_months = 0
+    done_years = 0
+    n_years_total = Y1 - Y0 + 1
+
+    def _flush_year(year):
+        nonlocal done_years
+        months = year_buf.pop(year)
+        block = np.concatenate([months[m] for m in range(1, 13)], axis=0)
+        start = month_start_step(year, 1)
+        v_var[:, start:start + block.shape[0]] = block.T
+        done_years += 1
+        print(f"[{var}/{args.scenario}] {done_years}/{n_years_total} years written "
+              f"(last: {year}, {done_months}/{len(tasks)} months processed)")
+
     with ProcessPoolExecutor(max_workers=nworkers) as pool:
         while len(in_flight) < window and _submit_next(pool):
             pass
@@ -290,15 +345,26 @@ def main():
             completed, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
             for fut in completed:
                 year, month, start, packed = fut.result()
-                ntime = packed.shape[0]
-                v_var[:, start:start + ntime] = packed.T
-                done += 1
-                if done % 12 == 0 or done == len(tasks):
-                    print(f"[{var}/{args.scenario}] {done}/{len(tasks)} months written (last: {year}-{month:02d})")
+                year_buf.setdefault(year, {})[month] = packed
+                done_months += 1
+                if len(year_buf[year]) == 12:
+                    _flush_year(year)
                 _submit_next(pool)
 
+    assert not year_buf, f"incomplete years never flushed: {sorted(year_buf)}"
+    assert done_years == n_years_total, f"{done_years}/{n_years_total} years written"
     ds.close()
-    print(f"[{var}/{args.scenario}] done: {out_path}")
+
+    # Only reaches here after every year was written and the file closed
+    # cleanly -- rename .partial -> the real name the Fortran reader expects
+    # now, not before, so an interrupted run never leaves something at
+    # out_path that looks complete but isn't (see tmp_path comment above).
+    final_size = tmp_path.stat().st_size
+    expected_size_min = NCELL * total_steps * 2  # int16 data alone, file has a bit more (header, DTIME, lon/lat)
+    if final_size < expected_size_min:
+        raise AssertionError(f"{tmp_path} is {final_size} bytes, expected at least {expected_size_min}")
+    tmp_path.rename(out_path)
+    print(f"[{var}/{args.scenario}] done: {out_path} ({final_size} bytes)")
 
 
 if __name__ == "__main__":

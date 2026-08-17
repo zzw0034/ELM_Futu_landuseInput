@@ -8,8 +8,8 @@
 #SBATCH -c 16
 #SBATCH --mem=96g
 #SBATCH -t 08:00:00
-#SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%A_%a.out
-#SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%A_%a.err
+#SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.out
+#SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.err
 set -euo pipefail
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate
 export OPENBLAS_NUM_THREADS=1
@@ -22,6 +22,6 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 
 $PY scripts/10_build_future_cpl_bypass.py --scenario "$SCENARIO" --var "$VARNAME"
 
-OUTDIR=/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim/$SCENARIO
+OUTDIR=/scratch/hpcl-cli185/zw5/future_clim/$SCENARIO
 mkdir -p "$OUTDIR"
 cp -n /projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/zone_mappings.txt "$OUTDIR/zone_mappings.txt"

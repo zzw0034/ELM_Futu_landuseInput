@@ -139,12 +139,17 @@ scenario directory gets an unmodified copy of the *same* `zone_mappings.txt`
 `zone_mappings.txt` actually encodes 7 longitude zones, and most of the real
 SEUS domain resolves to zones 2-7, not zone 1 — yet only a single merged
 `z01.nc` (all 7 zones concatenated in `zone_mappings.txt` order) exists for
-the historical variables, and the historical run reads it without error. How
-that's reconciled at the Fortran level is not fully resolved — see
-[[tessfa2_cpl_bypass_zone_mapping_mystery]]. It doesn't block this work: the
-future files are built as a structural clone of the proven-working merged
-`z01` layout, using the identical `zone_mappings.txt`, so whatever mechanism
-makes historical reads land on the right gridcell applies identically here.
+the historical variables. This looked alarming at first (a zone-2+ gridcell
+should try to open a nonexistent `z02.nc` and crash) but **is confirmed not a
+bug**: compared the finished historical run's own history output
+(`*.elm.h1.2020-02-01-00000.nc`, `TBOT(time,topounit)`) at two real zone-2
+gridcells against (a) the original never-merged `7zone/z02.nc`, (b) the
+merged `z01.nc` at the correct global offset, (c) the merged `z01.nc` at a
+naive raw index. The model's actual output matched (a)/(b) to within ~5-11K
+(unexplained, but small) and was ~100K away from (c) — not remotely
+ambiguous. See [[tessfa2_cpl_bypass_zone_mapping_mystery]] for the full
+trail; the exact Fortran-level mechanism that avoids the file-not-found path
+is still untraced, but the read is empirically correct.
 
 ## 5. Calendar
 
@@ -155,14 +160,132 @@ case (`CALENDAR=NO_LEAP` in `env_build.xml`) needs a fixed 365 days/year,
 each timestep's date from the source file's `time` variable, not by
 assuming a fixed day count) before packing.
 
-## 6. Files
+## 6. Processing pipeline and files
 
 - `scripts/10_build_future_cpl_bypass.py` — builds one
   `DBCCA_Daymet_TESSFA2_<VAR>_2023-2100_z01.nc` for one (scenario, variable)
-  pair. Streams month-by-month (doesn't hold the full ~100GB/variable array
-  in memory).
+  pair.
 - `jobs/submit_future_cpl_bypass.sbatch` — one Slurm job per (scenario,
-  variable); set `SCENARIO`/`VARNAME` via `--export`.
+  variable); set `SCENARIO`/`VARNAME` via `--export`. `-c 16 --mem=96g`.
+
+**How the conversion actually runs**: 924 months (77 years x 12) of source
+data need reading, packing, and writing per variable per scenario. The
+per-month unit of work (`process_month`: read one source `clmforc.*.nc`
+file, strip Feb 29 if present, transpose/flatten to the `n=225625` grid
+order, pack to int16) is CPU/IO-bound and embarrassingly parallel across
+months — the position each month writes to (`month_start_step`) is pure
+arithmetic (dummy-year offset + fixed NOLEAP month lengths), independent of
+processing order, so workers can finish in any order without a running
+counter.
+
+Runs via `concurrent.futures.ProcessPoolExecutor`, one process per
+`SLURM_CPUS_PER_TASK` (16), with a **bounded sliding window**: at most
+`2 x nworkers` months are ever in flight (submitted-but-unwritten) at once.
+Only the main process ever touches the output file — workers return
+`(year, month, start_index, packed_array)` and the main process writes each
+directly to its known position, so out-of-order completion is safe by
+construction. The bound matters (see §6.1): workers can finish faster than
+the main process drains results, and an unbounded submit lets that backlog
+grow without limit.
+
+`DTIME` is pure arithmetic too (doesn't depend on any source data), so it's
+written in one vectorized call instead of one per timestep.
+
+### 6.1 Bug history (2026-08-17, same session as the initial patch)
+
+Four real bugs surfaced while scaling this up from a smoke test to the full
+77-year run, in order:
+
+1. **CPU-bound compression.** First version wrote NetCDF4 with
+   `zlib, complevel=4`. Measured 94.6% single-core CPU on the writer process
+   — compression, not disk/network I/O, was the bottleneck (confirmed before
+   assuming a faster filesystem would help: it wouldn't have). Fix: dropped
+   compression — the uncompressed storage budget (~2.9TiB for all 7 vars x 4
+   scenarios) fits comfortably in the ~46TB free on `/projects/hpcl-cli185`,
+   so there was nothing to trade for.
+2. **OOM #1: unbounded backlog.** First parallel version submitted all 924
+   months to the pool up front. Workers (16, without compression) completed
+   faster than the main process's netCDF writes could drain them; completed-
+   but-unconsumed results (each a full packed month, 100+MB) piled up in
+   memory — killed at `--mem=48g` in ~90s. Fix: the bounded sliding window
+   described above.
+3. **OOM #2: per-worker temporaries.** Even with the window fix, still
+   OOM-killed. Root cause: `read_month` upcast the (already float32) source
+   to float64, and `pack_month`'s `(arr - add_off) / scale` chain allocated a
+   fresh float64-sized temporary at every step — measured peak ~2-3GB/worker
+   against source data that's only ~223MB/month. Fix: stayed in float32
+   throughout, did the offset/scale/round/clip chain in place on one buffer.
+   Peak dropped to ~700MB/worker.
+4. **Silent data corruption (not a crash — the dangerous kind).** With the
+   OOM fixed, first two full-scale attempts wrote successfully but read back
+   wrong: `pack_month`/`process_month` were proven bit-reproducible in
+   isolation, but small-scale windowed tests (24, then 48 months) started
+   failing spot-checks. Root cause: output was NetCDF4 with
+   `chunksizes=(NCELL, STEPS_PER_YEAR)` — one chunk = one full year, ~1.3GB —
+   and HDF5's default per-variable chunk cache is a few MB. Scattered,
+   out-of-order, partial (one month at a time) writes into the same
+   1.3GB chunk could evict/reload it between writes and silently lose an
+   earlier month's data with **no error at all**. Enlarging the chunk cache
+   to fit one full chunk (`set_var_chunk_cache`) fixed it at small scale
+   (0/24, then 0/48 months verified correct across multiple year-chunk
+   boundaries) — but **broke again at the real 78-year/924-month scale**,
+   almost certainly because enough out-of-order year-chunks were in flight
+   to thrash a cache sized for only one. Real fix: stopped using NetCDF4
+   chunking altogether. Switched output format to **NETCDF3_64BIT_OFFSET**
+   (`ncdump -k` confirms this is exactly what the *historical*
+   `Daymet_ERA5_TESSFA.4km_*_1980-2023_z01.nc` files already are — this
+   script had been using NetCDF4 for no real reason). Classic format has no
+   chunking at all: writes are direct positional I/O, same as the Fortran
+   production script (`makezones_reanalysis.f90`) that built the historical
+   files, so this whole bug class doesn't apply.
+5. **Variable creation itself hung.** First classic-format attempt: a
+   120-month windowed test timed out at 20 minutes with *zero* output, not
+   even the first print statement after `createVariable`. Root cause:
+   classic NetCDF's `nc_enddef()` pre-writes a fill value across a
+   variable's *entire declared extent* (here, ~96GiB) before any real data
+   can be written, unless fill is explicitly disabled. Fix:
+   `createVariable(..., fill_value=False)` — safe here because every DTIME
+   index gets written (dummy year + all 924 months, contiguous, no gaps), so
+   there's nothing for a fill value to ever be read back.
+6. **Strided-write throughput.** With the fill-value hang fixed, timed
+   individual month-writes directly: **76-99 seconds each**, sequential or
+   out-of-order alike (~1.4MB/s effective for a ~108MB write — far below any
+   plausible storage bandwidth on either `/projects` or `/scratch`, i.e.
+   latency/overhead-bound, not bandwidth-bound). At that rate, 924
+   months/variable would be ~20 hours. Cause: the file's dimension order is
+   `(n, DTIME)` with `DTIME` fastest-varying (required — matches the
+   historical files and what the Fortran reader expects for its per-column
+   full-time-series reads), so a write covering a time range but all `n`
+   touches all 225,625 rows non-contiguously, once per write call. Fix:
+   batch writes per **year** instead of per-month — buffer a year's 12
+   completed months (in memory, keyed by year; task submission order plus
+   the sliding window means only a few years are ever partially buffered at
+   once) and issue one write per year instead of twelve. Each row then gets
+   touched once per year instead of twelve times. Measured a clean **~12x**
+   speedup (80s for one full year vs. ~920-1190s for 12 separate
+   month-writes covering the same data).
+
+Also added, same session, lower-severity robustness fixes from a code
+review: `set_auto_scale(False)` on the output variable (writes are already
+packed int16, not physical values — belt-and-suspenders against
+implicit/version-dependent auto-pack-on-write behavior, even though it
+wasn't observed to actually be corrupting output here); write under a
+`.partial` suffix and only rename to the real filename after every year is
+confirmed written and the file closed cleanly, so an interrupted run can
+never leave something at the expected path that looks complete but isn't;
+`zone_mappings.txt` row-count validated against `NCELL` instead of assumed.
+
+**Verified** (2026-08-17): ran the actual production `main()` end-to-end
+(`Y1` monkey-patched to a 3-year range for speed) — all 3 years written,
+dummy year confirmed all-sentinel, 9 spot-checked months across all 3 years
+matched independent recomputation exactly, temp-file rename happened only
+on success. Re-running the real 77-year job next.
+
+**Lesson for future variables/scenarios**: match the historical file format
+exactly (`NETCDF3_64BIT_OFFSET`, no chunking, no compression, fill disabled)
+rather than reaching for NetCDF4 features that aren't needed here, and batch
+writes at whatever granularity keeps per-call row-touches low given the
+fixed `(n, DTIME)` layout the reader requires.
 
 ```bash
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate
@@ -170,15 +293,21 @@ sbatch --export=ALL,SCENARIO=ssp245,VARNAME=TBOT jobs/submit_future_cpl_bypass.s
 # repeat for the other 6 variables and 3 remaining scenarios (28 jobs total)
 ```
 
-Output lands in `/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/
-Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim/<scenario>/`, one file per
-variable plus a copied `zone_mappings.txt`.
+Output lands in `/scratch/hpcl-cli185/zw5/future_clim/<scenario>/`, one file
+per variable plus a copied `zone_mappings.txt`. **Deliberately on `/scratch`,
+not `/projects`** — user's call, since `/scratch` is Lustre-backed and
+faster for this write pattern than the NFS-mounted `/projects`, and
+`/projects/hpcl-cli185` was already 98% full (§1). `/scratch` is subject to
+periodic purging, unlike `/projects` — fine for generating/validating output
+now, but before an actual 2024-2100 case run, confirm these files still
+exist or move them to a durable location under `/projects` and update
+`metdata_bypass` (and the `future_clim` path referenced below) accordingly.
 
 To use it in a future case's `user_nl_elm`:
 
 ```
 metdata_type   = 'era5-daymet-fut'
-metdata_bypass = '/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim/<scenario>'
+metdata_bypass = '/scratch/hpcl-cli185/zw5/future_clim/<scenario>'
 ```
 
 (requires the patched E3SM build — see §7.)
@@ -200,13 +329,17 @@ cpus, 120G, 30 min, just runs `./case.build` in the case root.
 
 ## 8. Storage
 
-Per-variable file size ≈ `225,625 cells × 227,760 steps (1 dummy + 77 real
-years × 2920) × 2 bytes` ≈ 96 GiB. 7 variables × 4 scenarios ≈ **2.6 TiB**
-total (vs. ~4.1 TiB for the no-code-change alternative that would have had
-to duplicate 1980-2023 in every scenario file — see §1). Output is written
-NetCDF4 with per-variable zlib compression (level 4, shuffle filter), so
-actual on-disk size will be somewhat smaller; not yet measured at full scale
-as of this writing.
+Per-variable file size = `225,625 cells x 227,760 steps (1 dummy + 77 real
+years x 2920) x 2 bytes` ~ 96 GiB (classic format, no compression — see
+§6.1 for why compression was dropped), plus a small amount of header/DTIME/
+LONGXY/LATIXY overhead. 7 variables x 4 scenarios ~ **2.6 TiB** total (vs.
+~4.1 TiB for the no-code-change alternative that would have had to
+duplicate 1980-2023 in every scenario file — see §1). Output as of this
+writing lives on `/scratch` (§6, has its own ~134TB free, separate from
+`/projects/hpcl-cli185`'s ~46TB), not counted against the `/projects` budget
+that originally motivated avoiding the no-code-change alternative — but the
+2.6TiB comparison itself is unaffected by which filesystem ends up holding
+it.
 
 ## 9. What this does *not* cover
 
