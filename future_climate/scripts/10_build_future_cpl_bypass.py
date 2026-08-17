@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 
 import netCDF4 as nc
@@ -205,8 +205,18 @@ def main():
     # comfortably within the ~46TB free on /projects/hpcl-cli185 -- see
     # README_cpl_bypass_future.md Sec.8. Chunking is kept (one chunk per year)
     # since writes still happen in DTIME-axis slices.
-    v_var = ds.createVariable(var, "i2", ("n", "DTIME"),
-                               chunksizes=(NCELL, min(STEPS_PER_YEAR, total_steps)))
+    chunk_steps = min(STEPS_PER_YEAR, total_steps)
+    v_var = ds.createVariable(var, "i2", ("n", "DTIME"), chunksizes=(NCELL, chunk_steps))
+    # HDF5's default per-variable chunk cache is a few MB; one chunk here is
+    # a full year, ~1.3GB. Writes land as scattered, out-of-order, partial
+    # (one month at a time) hits within that one chunk -- with the default
+    # cache far smaller than the chunk, each partial write can evict/reload
+    # a chunk mid-year and silently lose an earlier month's data in it
+    # (confirmed empirically: reproduced 0 mismatches -> real, non-flaky
+    # mismatches by removing this, then fixed by adding it back). Size the
+    # cache to comfortably hold one full chunk.
+    chunk_bytes = NCELL * chunk_steps * 2
+    v_var.set_var_chunk_cache(size=int(chunk_bytes * 1.5) + (1 << 20), nelems=4133, preemption=0.75)
     v_var.add_offset = np.float32(add_off)
     v_var.scale_factor = np.float32(scale)
 
@@ -250,20 +260,42 @@ def main():
     tasks = [(y, m) for y in range(Y0, Y1 + 1) for m in range(1, 13)]
     print(f"[{var}/{args.scenario}] {len(tasks)} months to process with {nworkers} worker processes")
 
+    # Bounded sliding window, not "submit all 924 up front": workers finish
+    # faster than this process's netCDF writes drain them, so an unbounded
+    # submit let completed-but-unconsumed results (each a full packed month,
+    # ~100+MB) pile up in memory faster than the write loop could keep up --
+    # that backlog, not per-worker peak usage, is what OOM-killed the first
+    # two attempts at --mem=48g even after the float32 fix. Capping in-flight
+    # futures at 2x worker count bounds that backlog to a fixed size.
+    window = nworkers * 2
+    task_iter = iter(tasks)
+    in_flight = set()
+
+    def _submit_next(pool):
+        try:
+            y, m = next(task_iter)
+        except StopIteration:
+            return False
+        in_flight.add(pool.submit(process_month, args.scenario, var, y, m, add_off, scale, raw_sentinel))
+        return True
+
     done = 0
     with ProcessPoolExecutor(max_workers=nworkers) as pool:
-        futures = [pool.submit(process_month, args.scenario, var, y, m, add_off, scale, raw_sentinel)
-                   for y, m in tasks]
+        while len(in_flight) < window and _submit_next(pool):
+            pass
         # Workers only read+pack; only this (main) process ever writes to ds,
         # so out-of-order completion is safe -- each block's position comes
         # from month_start_step, not from submission/completion order.
-        for fut in as_completed(futures):
-            year, month, start, packed = fut.result()
-            ntime = packed.shape[0]
-            v_var[:, start:start + ntime] = packed.T
-            done += 1
-            if done % 12 == 0 or done == len(tasks):
-                print(f"[{var}/{args.scenario}] {done}/{len(tasks)} months written (last: {year}-{month:02d})")
+        while in_flight:
+            completed, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+            for fut in completed:
+                year, month, start, packed = fut.result()
+                ntime = packed.shape[0]
+                v_var[:, start:start + ntime] = packed.T
+                done += 1
+                if done % 12 == 0 or done == len(tasks):
+                    print(f"[{var}/{args.scenario}] {done}/{len(tasks)} months written (last: {year}-{month:02d})")
+                _submit_next(pool)
 
     ds.close()
     print(f"[{var}/{args.scenario}] done: {out_path}")
