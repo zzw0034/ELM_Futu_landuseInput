@@ -78,14 +78,81 @@ def run_variant(label, use_set_fill_off):
     return t_close - t0
 
 
+ATTRS = {
+    "title": "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing",
+    "source": "CanESM5 ssp245 r1i1p1f1, DBCCA bias-corrected/downscaled against Daymet",
+    "build_method": "Approach B: staged per-year files, then row-major merge",
+    "comment": "Record 1 is an UNUSED PLACEHOLDER YEAR. " * 8,
+    "calendar_note": "Source data use a standard Gregorian calendar; Feb 29 removed. " * 3,
+    "ocean_sentinel_note": "Raw packed value used for ocean/invalid gridcells. " * 3,
+}
+
+
+def run_attr_variant(label, batched):
+    """Time attribute-setting AFTER the ~96GiB variable exists.
+
+    netCDF4-python wraps each individual attribute assignment on a classic
+    file in its own redef/enddef pair. In classic format the header sits at
+    the front of the file, so a header that grows forces everything after
+    it -- here the whole ~96GiB variable region -- to shift. Setting ~9
+    attributes one at a time could therefore mean ~9 full-file rewrites,
+    which matches the ~386GB cumulative writes and 21MB/s block allocation
+    seen on jobs 465246/465247. setncatts() batches them into ONE
+    redef/enddef; this measures whether that is the difference.
+    """
+    path = BENCH_DIR / f"{label}.nc"
+    print(f"\n=== {label}: attributes {'BATCHED via setncatts()' if batched else 'set ONE AT A TIME'} ===",
+          flush=True)
+    t0 = time.time()
+    ds = nc.Dataset(path, "w", format="NETCDF3_64BIT_OFFSET")
+    ds.createDimension("n", NCELL)
+    ds.createDimension("DTIME", TOTAL_STEPS)
+    v_small = ds.createVariable("LONGXY", "f4", ("n",), fill_value=False)
+    v_big = ds.createVariable("VAR", "i2", ("n", "DTIME"), fill_value=False)
+    v_big.set_auto_scale(False)
+    t_define = time.time()
+    print(f"  vars defined: {t_define - t0:.1f}s", flush=True)
+
+    if batched:
+        v_big.setncatts({"add_offset": np.float32(0.05), "scale_factor": np.float32(3.4e-06)})
+        ds.setncatts(ATTRS)
+    else:
+        v_big.add_offset = np.float32(0.05)
+        v_big.scale_factor = np.float32(3.4e-06)
+        for k, v in ATTRS.items():
+            setattr(ds, k, v)
+    t_attrs = time.time()
+    print(f"  ATTRIBUTES SET: {t_attrs - t_define:.1f}s", flush=True)
+
+    v_small[:] = np.arange(NCELL, dtype=np.float32)
+    t_first = time.time()
+    print(f"  first data write: {t_first - t_attrs:.1f}s", flush=True)
+    ds.close()
+    real_mib = path.stat().st_blocks * 512 / 2**20
+    total = time.time() - t0
+    print(f"  TOTAL: {total:.1f}s | real disk usage: {real_mib:.0f} MiB", flush=True)
+    return total
+
+
 print(f"Production-scale fill-mode test: n={NCELL}, DTIME={TOTAL_STEPS} "
       f"({NOMINAL_GIB:.1f} GiB variable)", flush=True)
 
 t_with = run_variant("B_set_fill_off", True)
 t_without = run_variant("A_default", False)
 
-print("\n=== SUMMARY ===", flush=True)
+print("\n=== SUMMARY (fill mode) ===", flush=True)
 print(f"  with set_fill_off():    {t_with:.1f}s", flush=True)
 print(f"  without (current code): {t_without:.1f}s", flush=True)
 if t_with > 0:
     print(f"  speedup: {t_without / t_with:.1f}x", flush=True)
+
+# Batched variant runs FIRST so its number survives a walltime kill if the
+# one-at-a-time variant turns out to be the pathological case.
+t_batched = run_attr_variant("D_attrs_batched", True)
+t_single = run_attr_variant("C_attrs_one_at_a_time", False)
+
+print("\n=== SUMMARY (attribute batching) ===", flush=True)
+print(f"  setncatts() batched:  {t_batched:.1f}s", flush=True)
+print(f"  one at a time (current code): {t_single:.1f}s", flush=True)
+if t_batched > 0:
+    print(f"  speedup: {t_single / t_batched:.1f}x", flush=True)
