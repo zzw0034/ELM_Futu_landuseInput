@@ -127,29 +127,48 @@ array) — same packing convention both sides of the 2023/2024 splice.
 
 The flattened `n=225625` dimension in every cpl_bypass file — historical and
 future — is ordered `n = ilon*361 + ilat` (longitude outer loop, latitude
-inner loop, both ascending), which is exactly the row order of
-`zone_mappings.txt` (`/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/
-datm7/Daymet_ERA5_TESSFA2/zone_mappings.txt`, 225,625 rows). The future
-files' own `lon`/`lat` coordinate arrays are already in this same ascending
-order (verified against `zone_mappings.txt` to 1e-3), so building the merged
-`n`-ordered array is a transpose + reshape, not a real remap. Every future
-scenario directory gets an unmodified copy of the *same* `zone_mappings.txt`
-— the grid hasn't changed, only the time axis has.
+inner loop, both ascending). The future files' own `lon`/`lat` coordinate
+arrays are already in this same ascending order, so building the merged
+`n`-ordered array is a transpose + reshape, not a real remap.
 
-`zone_mappings.txt` actually encodes 7 longitude zones, and most of the real
-SEUS domain resolves to zones 2-7, not zone 1 — yet only a single merged
-`z01.nc` (all 7 zones concatenated in `zone_mappings.txt` order) exists for
-the historical variables. This looked alarming at first (a zone-2+ gridcell
-should try to open a nonexistent `z02.nc` and crash) but **is confirmed not a
-bug**: compared the finished historical run's own history output
-(`*.elm.h1.2020-02-01-00000.nc`, `TBOT(time,topounit)`) at two real zone-2
-gridcells against (a) the original never-merged `7zone/z02.nc`, (b) the
-merged `z01.nc` at the correct global offset, (c) the merged `z01.nc` at a
-naive raw index. The model's actual output matched (a)/(b) to within ~5-11K
-(unexplained, but small) and was ~100K away from (c) — not remotely
-ambiguous. See [[tessfa2_cpl_bypass_zone_mapping_mystery]] for the full
-trail; the exact Fortran-level mechanism that avoids the file-not-found path
-is still untraced, but the read is empirically correct.
+**There are two different files both named `zone_mappings.txt`** — this
+tripped up an earlier version of this pipeline, worth being explicit about:
+
+- `Daymet_ERA5_TESSFA2/zone_mappings.txt` (parent dir): the *original*
+  7-zone table (zone column 2-7 across most of the domain, `grid_map` resets
+  to 1 at the start of each zone). Matches `cpl_bypass_full/7zone/`, the
+  never-merged per-zone files.
+- `Daymet_ERA5_TESSFA2/cpl_bypass_full/zone_mappings.txt`: what
+  `metdata_bypass` (which points at `cpl_bypass_full/`) + `'/zone_mappings.txt'`
+  actually resolves to in the Fortran reader. **Every row's zone is
+  flattened to 1**, and `grid_map` is a single **global** 1..225,625 index,
+  not a per-zone one.
+
+Confirmed via `md5sum` (different) and a full-file diff: identical row
+count and identical `lon`/`lat` columns line-for-line, but the zone/grid_map
+columns differ from line 34,657 onward (i.e. everywhere outside the
+original zone 1).
+
+This is the actual mechanism behind an earlier open question (why a
+zone-2+ gridcell doesn't crash trying to open a nonexistent `z02.nc`, see
+[[tessfa2_cpl_bypass_zone_mapping_mystery]] for the full trail including the
+model-output cross-check that first confirmed reads were landing on the
+right gridcell before this was found): the reader always computes zone=1 for
+every point using the `cpl_bypass_full/` copy, so it always builds a `z01`
+filename and always finds it — it never has a reason to look for
+`z02`..`z07`. And since `grid_map` in that copy is already the global index,
+reading position `gtoget` directly out of the merged `z01.nc` lands on the
+right row with no offset arithmetic needed.
+
+**The bug this uncovered**: this pipeline's `ZONE_MAPPINGS` constant, and
+the `zone_mappings.txt` copied into each scenario's output directory, were
+both reading the wrong (parent-dir, 7-zone) file. Grid order itself was
+unaffected (lon/lat columns are identical), but a future case launched with
+that copy would have computed zone 2-7 for most of the SEUS domain and
+crashed trying to open `DBCCA_Daymet_TESSFA2_<VAR>_2023-2100_z02.nc` etc.,
+which don't exist (only `z01` is generated). Fixed to source from
+`cpl_bypass_full/zone_mappings.txt` in both the Python script and the sbatch
+copy step.
 
 ## 5. Calendar
 
