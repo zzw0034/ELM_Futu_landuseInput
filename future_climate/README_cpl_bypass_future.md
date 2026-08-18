@@ -294,11 +294,21 @@ confirmed written and the file closed cleanly, so an interrupted run can
 never leave something at the expected path that looks complete but isn't;
 `zone_mappings.txt` row-count validated against `NCELL` instead of assumed.
 
-**Verified** (2026-08-17): ran the actual production `main()` end-to-end
-(`Y1` monkey-patched to a 3-year range for speed) — all 3 years written,
-dummy year confirmed all-sentinel, 9 spot-checked months across all 3 years
-matched independent recomputation exactly, temp-file rename happened only
-on success. Re-running the real 77-year job next.
+**Verified** (2026-08-17): first the actual production `main()` end-to-end
+with `Y1` monkey-patched to a 3-year range for speed (all 3 years written,
+dummy year all-sentinel, 9 spot-checked months matched independent
+recomputation, temp-file rename happened only on success), then the real
+77-year job itself (job 464556, TBOT/ssp245, `sbatch ... --mem=96g`):
+**completed in 4h32m**, no errors. Post-hoc verification against the actual
+output file (reading a 300-point sample of `n` rather than all 225,625 --
+even *reads* spanning a time-slice across all `n` hit the same
+strided-access slowness as the writes did, see above): dummy year
+confirmed all-sentinel at 3 positions, 7 months spread across the entire
+2024-2100 range matched independent recomputation exactly, decoded
+temperatures at 3 widely-spaced timesteps all fell in the expected
+~230-320K physical range, land/ocean split (160/300 sampled) matched the
+historical ~52% land fraction. File: `/scratch/hpcl-cli185/zw5/future_clim/
+ssp245/DBCCA_Daymet_TESSFA2_TBOT_2023-2100_z01.nc`, 102,780,328,956 bytes.
 
 **Lesson for future variables/scenarios**: match the historical file format
 exactly (`NETCDF3_64BIT_OFFSET`, no chunking, no compression, fill disabled)
