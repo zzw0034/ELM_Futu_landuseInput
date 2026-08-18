@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import os
+import subprocess
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 
@@ -83,6 +84,75 @@ OCEAN_SENTINEL_RAW = {
 # day-of-year (0-indexed) at the start of each month, fixed NOLEAP lengths
 # (Feb pegged to 28, matching the source data with Feb 29 stripped).
 _CUM_DAYS_NOLEAP = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+
+
+NCGEN = "/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/ncgen"
+
+
+def _cdl_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def build_header_with_ncgen(path, var, total_steps, add_off, scale, raw_sentinel,
+                            global_attrs):
+    """Write the output file's COMPLETE header -- dimensions, all four
+    variables, and every attribute -- in a single ncgen pass.
+
+    Why not build the header with netCDF4-python: on a classic
+    (NETCDF3_64BIT_OFFSET) file the header lives at the front, so growing it
+    shifts everything after it -- here the whole ~96GiB packed variable. And
+    netCDF4-python issues nc_redef/nc_enddef around EACH individually-set
+    attribute on a NETCDF3 file (its own setncatts docstring says exactly
+    this), so the 8-9 attributes these builders set after declaring that
+    variable meant 8-9 full-file rewrites. Measured 2026-08-18: that is what
+    made "creating the final file" take hours with zero visible progress
+    (jobs 465175/465183 stalled 1.5h+; 465246/465247 cancelled after 40min
+    still short of it). An isolated benchmark doing nothing but two
+    setncatts() calls rewrote ~40GiB in 11 minutes with no data written
+    (job 465260).
+
+    Batching with setncatts() is not enough and neither is reordering:
+    add_offset/scale_factor cannot be set until the variable exists, and that
+    one remaining setncatts() still costs a full rewrite (~44MB/s, ~37min --
+    job 465262). ncgen emits the entire header in one define session and one
+    nc_enddef, the same way the historical Fortran producer
+    (makezones_reanalysis.f90) does, so no rewrite is possible: measured
+    **0.1s, 0 MiB written** for this exact 95.7GiB header (job 465276),
+    verified to produce format kind "64-bit offset", correct attribute
+    values, and byte-exact round-trip of packed int16 data.
+
+    Callers then open the file with mode="a" and write data; data writes
+    never touch the header, so the rewrite cannot reappear.
+
+    -6 = 64-bit offset (what NETCDF3_64BIT_OFFSET means, matching the
+    historical files); -x = no fill, so declaring the variable costs nothing.
+    """
+    lines = [f"netcdf {path.stem} {{", "dimensions:",
+             f"\tn = {NCELL} ;", f"\tDTIME = {total_steps} ;", "variables:",
+             "\tdouble DTIME(DTIME) ;",
+             '\t\tDTIME:long_name = "Day of Year" ;',
+             f'\t\tDTIME:units = "Days since {DUMMY_YEAR}-01-01 00:00" ;',
+             "\tfloat LONGXY(n) ;", "\tfloat LATIXY(n) ;",
+             f"\tshort {var}(n, DTIME) ;",
+             # repr of the float32-rounded value, so ncgen stores the same
+             # bits netCDF4-python's np.float32(...) would have stored.
+             f"\t\t{var}:add_offset = {float(np.float32(add_off))!r}f ;",
+             f"\t\t{var}:scale_factor = {float(np.float32(scale))!r}f ;",
+             "", "// global attributes:"]
+    for k, v in global_attrs.items():
+        if isinstance(v, str):
+            lines.append(f'\t\t:{k} = "{_cdl_escape(v)}" ;')
+        else:  # int16 sentinel -- 's' suffix keeps it a short, as before
+            lines.append(f"\t\t:{k} = {int(v)}s ;")
+    lines.append("}")
+
+    cdl_path = path.with_suffix(path.suffix + ".cdl")
+    cdl_path.write_text("\n".join(lines) + "\n")
+    res = subprocess.run([NCGEN, "-6", "-x", "-b", "-o", str(path), str(cdl_path)],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"ncgen failed (rc={res.returncode}):\n{res.stdout}\n{res.stderr}")
+    cdl_path.unlink()
 
 
 def month_start_step(year: int, month: int) -> int:
@@ -235,67 +305,53 @@ def main():
     # positional I/O, same as the Fortran production script
     # (makezones_reanalysis.f90) that built the historical files -- so this
     # whole class of bug doesn't apply.
-    ds = nc.Dataset(tmp_path, "w", format="NETCDF3_64BIT_OFFSET")
-    ds.createDimension("n", NCELL)
-    ds.createDimension("DTIME", total_steps)
-    # Create EVERY variable, including the ~96GiB packed field, before the
-    # first data write. netCDF4-python leaves define mode on the first [:]=
-    # assignment; a later createVariable then redef/enddef's. Even with
-    # fill_value=False on that late add, classic enddef still extended the
-    # file and spent ~80 min writing ~93GiB of zeros (scratch job 464980,
-    # 2026-08-18) with no worker pool and no dummy-year sentinel on disk.
-    # fill_value=False on all vars: classic nc_enddef() otherwise pre-writes
-    # fill across the FULL declared extent -- confirmed that alone hung
-    # variable creation past a 15-minute srun timeout. Safe to skip: every
-    # DTIME index is written (dummy year + all 924 months, contiguous).
-    v_dtime = ds.createVariable("DTIME", "f8", ("DTIME",), fill_value=False)
-    v_dtime.long_name = "Day of Year"
-    v_dtime.units = f"Days since {DUMMY_YEAR}-01-01 00:00"
-    v_lon = ds.createVariable("LONGXY", "f4", ("n",), fill_value=False)
-    v_lat = ds.createVariable("LATIXY", "f4", ("n",), fill_value=False)
-    v_var = ds.createVariable(var, "i2", ("n", "DTIME"), fill_value=False)
-    v_var.add_offset = np.float32(add_off)
-    v_var.scale_factor = np.float32(scale)
+    global_attrs = {
+        "title": "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing",
+        "source": (f"CanESM5 {args.scenario} r1i1p1f1, DBCCA bias-corrected/downscaled "
+                   f"against Daymet, TESSFA2 (SEUS) 4km grid"),
+        "comment": (
+            f"Record 1 (DTIME index 0-{STEPS_PER_YEAR - 1}, nominal year {DUMMY_YEAR}) is an "
+            "UNUSED PLACEHOLDER YEAR, not real data. It exists only so that "
+            "startyear_met in the patched cpl_bypass reader (lnd_import_export.F90, "
+            "metdata_type='era5-daymet-fut') can be set to one year before the "
+            "future run's real first year (2024), which avoids a tindex "
+            "wraparound bug in a shared bound-check for runs whose first model "
+            f"year equals startyear_met exactly. Every cell of the {DUMMY_YEAR} "
+            "record (land and ocean) is filled with the same raw sentinel value "
+            "used for ocean/invalid cells in the real years, so it decodes to an "
+            "obviously out-of-physical-range value and fails loudly if ever read "
+            "by mistake. Real forcing begins at DTIME index "
+            f"{STEPS_PER_YEAR} (2024-01-01 00:00Z, 3-hourly, mid-interval "
+            "timestamps)."
+        ),
+        "calendar_note": ("Source CanESM5-DBCCA-TESSFA2 data use a standard (Gregorian, "
+                          "leap-year) calendar; Feb 29 was removed from every leap year "
+                          "to match the model's CALENDAR=NO_LEAP (fixed 365 days/year, "
+                          "2920 3-hourly steps/year)."),
+        "ocean_sentinel_raw": np.int16(raw_sentinel),
+        "ocean_sentinel_note": ("Raw packed value used for ocean/invalid gridcells, taken "
+                                "unchanged from the historical Daymet_ERA5_TESSFA.4km_"
+                                f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
+                                "is identical between the historical and future forcing."),
+    }
+    build_header_with_ncgen(tmp_path, var, total_steps, add_off, scale, raw_sentinel,
+                            global_attrs)
+    print(f"[{var}/{args.scenario}] header built by ncgen", flush=True)
+
+    # Append mode: the header is already complete and final, so nothing here
+    # can trigger the header-growth rewrite described in
+    # build_header_with_ncgen(). Never add an attribute past this point.
+    ds = nc.Dataset(tmp_path, "a")
+    v_dtime = ds.variables["DTIME"]
+    v_lon = ds.variables["LONGXY"]
+    v_lat = ds.variables["LATIXY"]
+    v_var = ds.variables[var]
     # Data assigned to v_var is already packed int16, not physical values --
     # without this, netCDF4-python's default auto-scale-on-write would
     # (re-)apply (data-add_offset)/scale_factor to it, since add_offset/
-    # scale_factor attributes are already set at this point. Empirically this
-    # wasn't observed to actually corrupt output in this script's specific
-    # write pattern (many 0/N-mismatch checks passed without it), but that's
-    # implicit, version/library-dependent behavior -- not something to rely
-    # on silently continuing to hold.
+    # scale_factor are present in the header.
     v_var.set_auto_scale(False)
 
-    ds.title = "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing"
-    ds.source = (f"CanESM5 {args.scenario} r1i1p1f1, DBCCA bias-corrected/downscaled "
-                 f"against Daymet, TESSFA2 (SEUS) 4km grid")
-    ds.comment = (
-        f"Record 1 (DTIME index 0-{STEPS_PER_YEAR - 1}, nominal year {DUMMY_YEAR}) is an "
-        "UNUSED PLACEHOLDER YEAR, not real data. It exists only so that "
-        "startyear_met in the patched cpl_bypass reader (lnd_import_export.F90, "
-        "metdata_type='era5-daymet-fut') can be set to one year before the "
-        "future run's real first year (2024), which avoids a tindex "
-        "wraparound bug in a shared bound-check for runs whose first model "
-        f"year equals startyear_met exactly. Every cell of the {DUMMY_YEAR} "
-        "record (land and ocean) is filled with the same raw sentinel value "
-        "used for ocean/invalid cells in the real years, so it decodes to an "
-        "obviously out-of-physical-range value and fails loudly if ever read "
-        "by mistake. Real forcing begins at DTIME index "
-        f"{STEPS_PER_YEAR} (2024-01-01 00:00Z, 3-hourly, mid-interval "
-        "timestamps)."
-    )
-    ds.calendar_note = ("Source CanESM5-DBCCA-TESSFA2 data use a standard (Gregorian, "
-                         "leap-year) calendar; Feb 29 was removed from every leap year "
-                         "to match the model's CALENDAR=NO_LEAP (fixed 365 days/year, "
-                         "2920 3-hourly steps/year).")
-    ds.ocean_sentinel_raw = np.int16(raw_sentinel)
-    ds.ocean_sentinel_note = ("Raw packed value used for ocean/invalid gridcells, taken "
-                               "unchanged from the historical Daymet_ERA5_TESSFA.4km_"
-                               f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
-                               "is identical between the historical and future forcing.")
-
-    # First data write leaves define mode. All variables already exist, so
-    # this enddef does not add a 96GiB field and must not fill it.
     v_lon[:] = lon
     v_lat[:] = lat
     # DTIME is pure arithmetic (doesn't depend on the source data at all) --

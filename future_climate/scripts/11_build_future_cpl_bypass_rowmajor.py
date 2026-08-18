@@ -63,17 +63,28 @@ add_offset_scale = _base.add_offset_scale
 load_grid_order = _base.load_grid_order
 read_month = _base.read_month
 pack_month = _base.pack_month
+build_header_with_ncgen = _base.build_header_with_ncgen
 
 ROW_CHUNK = 20000
 
 
-def create_var_file(path, var, total_steps, add_off, scale):
+def create_var_file(path, var, total_steps):
+    """One transient per-year staging file: raw packed int16, no attributes.
+
+    Deliberately carries NO add_offset/scale_factor. Setting an attribute
+    after declaring the variable rewrites the whole file (see
+    build_header_with_ncgen() in 10_build_future_cpl_bypass.py) -- only
+    ~1.3GiB each here rather than ~96GiB, but that is still ~200GiB of
+    pointless I/O across 78 files x 2 attributes. Safe to omit: these files
+    are read back below with set_auto_maskandscale(False), which returns the
+    stored int16 untouched regardless of attributes, and they are deleted
+    once the merge succeeds. The real packing metadata lives in the final
+    file's ncgen-built header.
+    """
     ds = nc.Dataset(path, "w", format="NETCDF3_64BIT_OFFSET")
     ds.createDimension("n", NCELL)
     ds.createDimension("DTIME", total_steps)
     v = ds.createVariable(var, "i2", ("n", "DTIME"), fill_value=False)
-    v.add_offset = np.float32(add_off)
-    v.scale_factor = np.float32(scale)
     v.set_auto_scale(False)
     return ds, v
 
@@ -88,7 +99,7 @@ def process_and_stage_year(scenario, var, year, add_off, scale, raw_sentinel, st
     months = [pack_month(read_month(scenario, var, year, m), add_off, scale, raw_sentinel)
               for m in range(1, 13)]
     block = np.concatenate(months, axis=0)  # (2920, NCELL)
-    ds, v = create_var_file(stage_path, var, STEPS_PER_YEAR, add_off, scale)
+    ds, v = create_var_file(stage_path, var, STEPS_PER_YEAR)
     v[:, :] = block.T
     ds.close()
     return year, stage_path
@@ -127,7 +138,7 @@ def main():
 
     # ---- Stage: dummy year (pure sentinel, no source read needed) ----
     dummy_path = stage_dir / f"y{DUMMY_YEAR}.nc"
-    ds_d, v_d = create_var_file(dummy_path, var, STEPS_PER_YEAR, add_off, scale)
+    ds_d, v_d = create_var_file(dummy_path, var, STEPS_PER_YEAR)
     v_d[:, :] = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
     ds_d.close()
     print(f"[{var}/{args.scenario}] dummy year {DUMMY_YEAR} staged ({time.time() - t0:.1f}s)", flush=True)
@@ -166,61 +177,54 @@ def main():
     total_steps = STEPS_PER_YEAR * n_years_all
     all_years_ordered = [DUMMY_YEAR] + list(range(Y0, Y1 + 1))
 
-    # NOTE: variable declaration order matters here. DTIME/LONGXY/LATIXY must
-    # be defined BEFORE the ~96GiB main variable, not after -- classic
-    # NETCDF3_64BIT_OFFSET lays fixed-size variables out in the file in
-    # definition order, so if the big variable were defined first (as
-    # create_var_file() alone would do), the first data write below
-    # (v_lon[:] = lon, physically positioned AFTER the big variable's
-    # region) would force the file to extend past that entire ~96GiB region
-    # just to reach LONGXY's location -- this is what stalled jobs 465175/
-    # 465183 for 1.5+ hours with zero merge progress (diagnosed 2026-08-18).
-    # 10_build_future_cpl_bypass.py's Approach A already gets this order
-    # right; this mirrors it instead of reusing create_var_file() as-is.
-    ds_final = nc.Dataset(tmp_path, "w", format="NETCDF3_64BIT_OFFSET")
-    ds_final.createDimension("n", NCELL)
-    ds_final.createDimension("DTIME", total_steps)
-    v_dtime = ds_final.createVariable("DTIME", "f8", ("DTIME",), fill_value=False)
-    v_dtime.long_name = "Day of Year"
-    v_dtime.units = f"Days since {DUMMY_YEAR}-01-01 00:00"
-    v_lon = ds_final.createVariable("LONGXY", "f4", ("n",), fill_value=False)
-    v_lat = ds_final.createVariable("LATIXY", "f4", ("n",), fill_value=False)
-    v_final = ds_final.createVariable(var, "i2", ("n", "DTIME"), fill_value=False)
-    v_final.add_offset = np.float32(add_off)
-    v_final.scale_factor = np.float32(scale)
+    # Header built entirely by ncgen in one pass -- see
+    # build_header_with_ncgen() in 10_build_future_cpl_bypass.py for why
+    # (building it with netCDF4-python cost 8-9 full ~96GiB rewrites here and
+    # is what stalled jobs 465175/465183/465246/465247).
+    global_attrs = {
+        "title": "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing",
+        "source": (f"CanESM5 {args.scenario} r1i1p1f1, DBCCA bias-corrected/downscaled "
+                   f"against Daymet, TESSFA2 (SEUS) 4km grid"),
+        "build_method": ("Approach B: staged per-year files, then row-major merge; "
+                         "header written in one pass by ncgen "
+                         "(see future_climate/README_cpl_bypass_future.md)"),
+        "comment": (
+            f"Record 1 (DTIME index 0-{STEPS_PER_YEAR - 1}, nominal year {DUMMY_YEAR}) is an "
+            "UNUSED PLACEHOLDER YEAR, not real data. It exists only so that "
+            "startyear_met in the patched cpl_bypass reader (lnd_import_export.F90, "
+            "metdata_type='era5-daymet-fut') can be set to one year before the "
+            "future run's real first year (2024), which avoids a tindex "
+            "wraparound bug in a shared bound-check for runs whose first model "
+            f"year equals startyear_met exactly. Every cell of the {DUMMY_YEAR} "
+            "record (land and ocean) is filled with the same raw sentinel value "
+            "used for ocean/invalid cells in the real years. Real forcing begins "
+            f"at DTIME index {STEPS_PER_YEAR} (2024-01-01 00:00Z, 3-hourly, "
+            "mid-interval timestamps)."
+        ),
+        "calendar_note": ("Source CanESM5-DBCCA-TESSFA2 data use a standard (Gregorian, "
+                          "leap-year) calendar; Feb 29 was removed from every leap year "
+                          "to match the model's CALENDAR=NO_LEAP (fixed 365 days/year, "
+                          "2920 3-hourly steps/year)."),
+        "ocean_sentinel_raw": np.int16(raw_sentinel),
+        "ocean_sentinel_note": ("Raw packed value used for ocean/invalid gridcells, taken "
+                                "unchanged from the historical Daymet_ERA5_TESSFA.4km_"
+                                f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
+                                "is identical between the historical and future forcing."),
+    }
+    build_header_with_ncgen(tmp_path, var, total_steps, add_off, scale, raw_sentinel,
+                            global_attrs)
+
+    # Append mode: header is complete and final. Never add an attribute past
+    # this point -- that is what reintroduces the full-file rewrite.
+    ds_final = nc.Dataset(tmp_path, "a")
+    v_final = ds_final.variables[var]
     v_final.set_auto_scale(False)
-    ds_final.title = "SEUS TESSFA2 future (2024-2100) CPL_BYPASS meteorological forcing"
-    ds_final.source = (f"CanESM5 {args.scenario} r1i1p1f1, DBCCA bias-corrected/downscaled "
-                        f"against Daymet, TESSFA2 (SEUS) 4km grid")
-    ds_final.build_method = ("Approach B: staged per-year files, then row-major merge "
-                              "(see future_climate/README_cpl_bypass_future.md)")
-    ds_final.comment = (
-        f"Record 1 (DTIME index 0-{STEPS_PER_YEAR - 1}, nominal year {DUMMY_YEAR}) is an "
-        "UNUSED PLACEHOLDER YEAR, not real data. It exists only so that "
-        "startyear_met in the patched cpl_bypass reader (lnd_import_export.F90, "
-        "metdata_type='era5-daymet-fut') can be set to one year before the "
-        "future run's real first year (2024), which avoids a tindex "
-        "wraparound bug in a shared bound-check for runs whose first model "
-        f"year equals startyear_met exactly. Every cell of the {DUMMY_YEAR} "
-        "record (land and ocean) is filled with the same raw sentinel value "
-        "used for ocean/invalid cells in the real years. Real forcing begins "
-        f"at DTIME index {STEPS_PER_YEAR} (2024-01-01 00:00Z, 3-hourly, "
-        "mid-interval timestamps)."
-    )
-    ds_final.calendar_note = ("Source CanESM5-DBCCA-TESSFA2 data use a standard (Gregorian, "
-                               "leap-year) calendar; Feb 29 was removed from every leap year "
-                               "to match the model's CALENDAR=NO_LEAP (fixed 365 days/year, "
-                               "2920 3-hourly steps/year).")
-    ds_final.ocean_sentinel_raw = np.int16(raw_sentinel)
-    ds_final.ocean_sentinel_note = ("Raw packed value used for ocean/invalid gridcells, taken "
-                                     "unchanged from the historical Daymet_ERA5_TESSFA.4km_"
-                                     f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
-                                     "is identical between the historical and future forcing.")
 
     lon, lat = load_grid_order()
-    v_lon[:] = lon
-    v_lat[:] = lat
-    v_dtime[:] = (np.arange(1, total_steps + 1) / STEPS_PER_DAY - 0.5 * (RES_HOURS / 24.0))
+    ds_final.variables["LONGXY"][:] = lon
+    ds_final.variables["LATIXY"][:] = lat
+    ds_final.variables["DTIME"][:] = (np.arange(1, total_steps + 1) / STEPS_PER_DAY
+                                      - 0.5 * (RES_HOURS / 24.0))
     print(f"[{var}/{args.scenario}] final file created ({time.time() - t0:.1f}s)", flush=True)
 
     readers = [nc.Dataset(year_files[y]) for y in all_years_ordered]
