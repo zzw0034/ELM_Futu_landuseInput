@@ -29,8 +29,20 @@ import netCDF4 as nc
 import numpy as np
 
 TESSFA2_ROOT = Path("/projects/hpcl-cli185/proj-shared/TESSFA/CanESM5")
+# NOT .../Daymet_ERA5_TESSFA2/zone_mappings.txt (parent dir) -- that's a
+# different, older file (md5 differs; found 2026-08-17): its zone column is
+# 2-7 with grid_map resetting per zone, matching cpl_bypass_full/7zone/, but
+# NOT what the model actually reads. This copy, physically inside
+# cpl_bypass_full/, has every row's zone flattened to 1 with grid_map as a
+# single global 1..225625 index, matching the merged z01.nc files (and is
+# what `metdata_bypass`+'/zone_mappings.txt' resolves to in the Fortran
+# reader, since metdata_bypass points at cpl_bypass_full/). Only lon/lat are
+# read here (used for LONGXY/LATIXY ordering) and those columns are
+# identical between the two files, so this only matters for which file gets
+# copied into each scenario's output dir (see submit_future_cpl_bypass.sbatch)
+# -- but use the authoritative one here too, for consistency.
 ZONE_MAPPINGS = Path("/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/"
-                      "Daymet_ERA5_TESSFA2/zone_mappings.txt")
+                      "Daymet_ERA5_TESSFA2/cpl_bypass_full/zone_mappings.txt")
 OUT_ROOT = Path("/scratch/hpcl-cli185/zw5/future_clim")
 # NOTE: /scratch is subject to periodic purging, unlike /projects. Fine for
 # generating and validating output now; before the actual 2024-2100 future
