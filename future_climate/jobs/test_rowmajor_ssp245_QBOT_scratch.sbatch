@@ -5,8 +5,8 @@
 #SBATCH -q normal
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 16
-#SBATCH --mem=120g
+#SBATCH -c 32
+#SBATCH --mem=190g
 #SBATCH -t 08:00:00
 #SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.out
 #SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.err
@@ -16,7 +16,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 
-# Approach B, parallel per-year staging, 16 workers -- test on /scratch
+# Approach B, parallel per-year staging, 32 workers -- test on /scratch
 # (Lustre, this directory's default stripe_count=1, unchanged), paired
 # with test_rowmajor_ssp119_QBOT_worldshared.sbatch (same variable,
 # world-shared) submitted at the same time for a direct timing
