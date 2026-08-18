@@ -20,16 +20,23 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 # instead of /scratch, so this stream and the /scratch array (job 464840)
 # run concurrently without competing for the same filesystem's I/O.
 # /projects/hpcl-cli185 had ~46TB free as of 2026-08-17 -- this stream's
-# 12 files (~96GiB each, ~1.1TiB total) fit comfortably.
+# 5 files (~96GiB each, ~480GiB total) fit comfortably.
+#
+# ssp370 only here -- ssp585 goes to the canonical world-shared inputdata
+# path instead (submit_future_cpl_bypass_array_ssp585.sbatch), since that's
+# where metdata_bypass will actually need to point eventually, avoiding a
+# later move. NOTE: world-shared and proj-shared are the SAME physical NFS
+# mount (both under /projects/hpcl-cli185), so that split doesn't add any
+# I/O parallelism on top of the /scratch-vs-/projects split -- it's purely
+# to land ssp585 in its final location, not a speed optimization.
 OUT_ROOT=/projects/hpcl-cli185/proj-shared/zw5/future_clim
 
-# 12 combinations, indices 0-11 (cancelled from the /scratch array's
-# indices 15-26 before they started, to split the remaining 23-combo
-# workload across both filesystems instead of contending on one).
-SCENARIOS=(ssp370 ssp370 ssp370 ssp370 ssp370 \
-           ssp585 ssp585 ssp585 ssp585 ssp585 ssp585 ssp585)
-VARNAMES=(TBOT QBOT FLDS PSRF WIND \
-          PRECTmms FSDS TBOT QBOT FLDS PSRF WIND)
+# 5 combinations, indices 0-4 (part of the original /scratch array's
+# indices 15-26, cancelled before they started, split three ways: this
+# stream, the ssp585-to-world-shared stream, and the rest staying on
+# /scratch under job 464840).
+SCENARIOS=(ssp370 ssp370 ssp370 ssp370 ssp370)
+VARNAMES=(TBOT QBOT FLDS PSRF WIND)
 
 SCENARIO=${SCENARIOS[$SLURM_ARRAY_TASK_ID]}
 VARNAME=${VARNAMES[$SLURM_ARRAY_TASK_ID]}
