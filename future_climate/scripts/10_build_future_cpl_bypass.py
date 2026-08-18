@@ -208,10 +208,15 @@ def main():
     # .partial file instead of something that looks like a finished,
     # ready-to-read output at the expected path.
     tmp_path = out_path.with_suffix(out_path.suffix + ".partial")
+    if tmp_path.exists():
+        leftover = tmp_path.stat().st_size
+        print(f"[{var}/{args.scenario}] removing leftover {tmp_path} "
+              f"({leftover} bytes)", flush=True)
+        tmp_path.unlink()
 
     print(f"[{var}/{args.scenario}] add_offset={add_off} scale_factor={scale} "
-          f"ocean_sentinel_raw={raw_sentinel}")
-    print(f"[{var}/{args.scenario}] writing {tmp_path} -> {out_path}")
+          f"ocean_sentinel_raw={raw_sentinel}", flush=True)
+    print(f"[{var}/{args.scenario}] writing {tmp_path} -> {out_path}", flush=True)
 
     lon, lat = load_grid_order()
     n_years = Y1 - Y0 + 1
@@ -233,20 +238,21 @@ def main():
     ds = nc.Dataset(tmp_path, "w", format="NETCDF3_64BIT_OFFSET")
     ds.createDimension("n", NCELL)
     ds.createDimension("DTIME", total_steps)
-    v_dtime = ds.createVariable("DTIME", "f8", ("DTIME",))
+    # Create EVERY variable, including the ~96GiB packed field, before the
+    # first data write. netCDF4-python leaves define mode on the first [:]=
+    # assignment; a later createVariable then redef/enddef's. Even with
+    # fill_value=False on that late add, classic enddef still extended the
+    # file and spent ~80 min writing ~93GiB of zeros (scratch job 464980,
+    # 2026-08-18) with no worker pool and no dummy-year sentinel on disk.
+    # fill_value=False on all vars: classic nc_enddef() otherwise pre-writes
+    # fill across the FULL declared extent -- confirmed that alone hung
+    # variable creation past a 15-minute srun timeout. Safe to skip: every
+    # DTIME index is written (dummy year + all 924 months, contiguous).
+    v_dtime = ds.createVariable("DTIME", "f8", ("DTIME",), fill_value=False)
     v_dtime.long_name = "Day of Year"
     v_dtime.units = f"Days since {DUMMY_YEAR}-01-01 00:00"
-    v_lon = ds.createVariable("LONGXY", "f4", ("n",))
-    v_lat = ds.createVariable("LATIXY", "f4", ("n",))
-    v_lon[:] = lon
-    v_lat[:] = lat
-    # fill_value=False: classic-format nc_enddef() otherwise pre-writes a
-    # fill value across the FULL declared extent of this variable (~96GiB)
-    # before any real data is written -- confirmed this alone was enough to
-    # make variable creation itself hang past a 15-minute srun timeout with
-    # no output at all. Safe to skip: every DTIME index gets written (dummy
-    # year + all 924 months, contiguous, no gaps), so there's nothing for
-    # the fill value to ever be read back.
+    v_lon = ds.createVariable("LONGXY", "f4", ("n",), fill_value=False)
+    v_lat = ds.createVariable("LATIXY", "f4", ("n",), fill_value=False)
     v_var = ds.createVariable(var, "i2", ("n", "DTIME"), fill_value=False)
     v_var.add_offset = np.float32(add_off)
     v_var.scale_factor = np.float32(scale)
@@ -288,6 +294,10 @@ def main():
                                f"{var}_1980-2023_z01.nc file so decoded sentinel behavior "
                                "is identical between the historical and future forcing.")
 
+    # First data write leaves define mode. All variables already exist, so
+    # this enddef does not add a 96GiB field and must not fill it.
+    v_lon[:] = lon
+    v_lat[:] = lat
     # DTIME is pure arithmetic (doesn't depend on the source data at all) --
     # write it in one shot instead of one nc call per step.
     v_dtime[:] = (np.arange(1, total_steps + 1) / STEPS_PER_DAY
@@ -295,10 +305,13 @@ def main():
 
     # dummy year: sentinel everywhere
     v_var[:, 0:STEPS_PER_YEAR] = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
+    print(f"[{var}/{args.scenario}] dummy year {DUMMY_YEAR} written "
+          f"({tmp_path.stat().st_size} bytes so far)", flush=True)
 
     nworkers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
     tasks = [(y, m) for y in range(Y0, Y1 + 1) for m in range(1, 13)]
-    print(f"[{var}/{args.scenario}] {len(tasks)} months to process with {nworkers} worker processes")
+    print(f"[{var}/{args.scenario}] {len(tasks)} months to process with {nworkers} worker processes",
+          flush=True)
 
     # Bounded sliding window, not "submit all 924 up front": workers finish
     # faster than this process's netCDF writes drain them, so an unbounded
@@ -345,7 +358,8 @@ def main():
         v_var[:, start:start + block.shape[0]] = block.T
         done_years += 1
         print(f"[{var}/{args.scenario}] {done_years}/{n_years_total} years written "
-              f"(last: {year}, {done_months}/{len(tasks)} months processed)")
+              f"(last: {year}, {done_months}/{len(tasks)} months processed)",
+              flush=True)
 
     with ProcessPoolExecutor(max_workers=nworkers) as pool:
         while len(in_flight) < window and _submit_next(pool):
@@ -376,7 +390,7 @@ def main():
     if final_size < expected_size_min:
         raise AssertionError(f"{tmp_path} is {final_size} bytes, expected at least {expected_size_min}")
     tmp_path.rename(out_path)
-    print(f"[{var}/{args.scenario}] done: {out_path} ({final_size} bytes)")
+    print(f"[{var}/{args.scenario}] done: {out_path} ({final_size} bytes)", flush=True)
 
 
 if __name__ == "__main__":

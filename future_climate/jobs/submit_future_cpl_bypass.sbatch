@@ -14,13 +14,14 @@ set -euo pipefail
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 
 # usage: sbatch --export=ALL,SCENARIO=ssp245,VARNAME=TBOT jobs/submit_future_cpl_bypass.sbatch
 : "${SCENARIO:?set SCENARIO=ssp119|ssp245|ssp370|ssp585}"
 : "${VARNAME:?set VARNAME=PRECTmms|FSDS|TBOT|QBOT|FLDS|PSRF|WIND}"
 
-$PY scripts/10_build_future_cpl_bypass.py --scenario "$SCENARIO" --var "$VARNAME"
+$PY -u scripts/10_build_future_cpl_bypass.py --scenario "$SCENARIO" --var "$VARNAME"
 
 OUTDIR=/scratch/hpcl-cli185/zw5/future_clim/$SCENARIO
 mkdir -p "$OUTDIR"
