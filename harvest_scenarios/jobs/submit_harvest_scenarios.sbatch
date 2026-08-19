@@ -6,8 +6,8 @@
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 1
-#SBATCH --mem=24g
-#SBATCH -t 04:00:00
+#SBATCH --mem=96g
+#SBATCH -t 00:30:00
 #SBATCH --array=0-3
 #SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/logs/%x_%A_%a.out
 #SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/logs/%x_%A_%a.err
@@ -28,25 +28,26 @@
 # -c 1: nothing in the script is threaded/parallel (OPENBLAS/OMP pinned to 1
 #   thread below, no multiprocessing, netCDF4/HDF5 single-threaded by
 #   default) -- there is no step that could use a second core.
-# --mem=24g: DERIVED, per array task (AGENTS.md: derive, do not guess).
-#   PCT_NAT_PFT is 77*17*324*504 float64 = 1.71GB; each HARVEST_* is
-#   77*324*504 float64 = 100MB. Live at peak, within one SSP iteration:
-#     default_pft 1.71 + rf_pft 1.71 (still referenced during the DF block)
-#     + df_pft 1.71 + validation read-back of PCT_NAT_PFT 1.71
-#     + default/df/rh_harvest 3x5x100MB = 1.50
-#     + increment_target/grass_removed/default_forest 0.30
-#     + 1850/2023 anchors and 2-D weights 0.05
-#     + interpreter/numpy/netCDF4 overhead ~0.30      => ~9GB
-#   24g leaves ~2.6x margin. Confirm against `seff` after the first run and
-#   tighten if warranted; peak could be cut further by `del rf_pft` once the
-#   RF file is written.
-# -t 04:00:00: NOT yet measured -- placeholder for the first (smoke) run
-#   only. Replace with a value derived from that run's actual elapsed time
-#   before submitting the remaining tasks.
+# --mem=96g: MEASURED, per array task. The 2026-08-19 smoke run (job
+#   466554_0, SSP1_RCP19, COMPLETED exit 0) reported MaxRSS = 17.6GB.
+#   An a-priori derivation from array sizes gave ~9GB and was about 2x low:
+#   it missed that clone_structure reads a NON-overridden variable in full
+#   before writing it (for the RH file that is all 1.71GB of PCT_NAT_PFT),
+#   and that netCDF4 hands back a masked array, so a read costs data + mask
+#   + the np.array() copy rather than one buffer. All four SSPs share
+#   identical array shapes, so 17.6GB should hold across tasks.
+#   96g leaves ~5.5x headroom over the measured peak. That is well above
+#   what the numbers require, and is a deliberate choice: the serial
+#   partition has thousands of idle cores, so a larger request costs
+#   essentially nothing in queue time, while an OOM kill mid-write costs a
+#   rerun. Peak could be cut later by `del rf_pft` once the RF file lands.
+# -t 00:30:00: MEASURED. The same smoke run took 00:02:20 for one SSP
+#   (3 files); 30 minutes is ~13x that. The earlier 04:00:00 was an
+#   unmeasured placeholder.
 #
 # Must run under Slurm, not on the login node: PCT_NAT_PFT is a
-# 77x17x324x504 float64 array (~1.7GB) per file; an earlier interactive
-# login-node run of this pipeline was OOM-killed (exit 137).
+# 77x17x324x504 float64 array (~1.7GB) per file, and measured peak RSS is
+# 17.6GB; an earlier interactive login-node run was OOM-killed (exit 137).
 
 # No `module load` here, deliberately -- do not add any.
 #   1. ~/.bashrc returns early for non-interactive shells (`case $- in *i*)`),

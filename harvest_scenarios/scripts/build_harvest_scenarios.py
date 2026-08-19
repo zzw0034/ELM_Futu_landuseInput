@@ -108,13 +108,23 @@ RH_SCALE = 0.5
 FALLBACK_GRASS_SPLIT = {12: 0.0, 13: 0.85, 14: 0.15}
 
 
-def clone_structure(src_path, out_path, overrides, global_note):
+def clone_structure(src_path, out_path, overrides, global_note, natveg_mask=None):
     """Create a fresh classic-format (NETCDF3_64BIT_OFFSET) copy of src_path,
     with every dim/var/attr copied, except variable names in `overrides`
     (dict: varname -> new ndarray) get the override data instead of the
-    source's own data. No compression, no chunking, one write per variable."""
+    source's own data. No compression, no chunking, one write per variable.
+
+    Writes to a temporary path, verifies the result reads back cleanly, and
+    only then atomically renames it into place. A job killed mid-write (this
+    workload peaks near 18GB, so an OOM kill is a realistic failure) must not
+    be able to leave a half-written file sitting under the final name -- this
+    project has already been burned once by a file that looked present but
+    was unreadable. os.replace() is atomic within a directory, so the final
+    name either does not exist or refers to a fully written, verified file.
+    """
+    tmp_path = f"{out_path}.tmp.{os.environ.get('SLURM_JOB_ID', os.getpid())}"
     src = nc4.Dataset(src_path)
-    dst = nc4.Dataset(out_path, "w", format="NETCDF3_64BIT_OFFSET")
+    dst = nc4.Dataset(tmp_path, "w", format="NETCDF3_64BIT_OFFSET")
 
     for name, dim in src.dimensions.items():
         dst.createDimension(name, (None if dim.isunlimited() else len(dim)))
@@ -131,6 +141,31 @@ def clone_structure(src_path, out_path, overrides, global_note):
     dst.setncattr("scenario_note", global_note)
     dst.close()
     src.close()
+
+    # Integrity gate: every variable must read back without an HDF/NetCDF
+    # error and without NaN, and PCT_NAT_PFT must still sum to 100 over the
+    # natural-vegetation mask. Only then is the file promoted to its final
+    # name. Note the mask comes from PCT_NATVEG (time-invariant, taken from
+    # the source), NOT from "wherever PCT_NAT_PFT happens to be nonzero" --
+    # the latter is self-referential and can never catch a cell that was
+    # wrongly zeroed out, since such a cell would simply drop out of its own
+    # mask.
+    try:
+        with nc4.Dataset(tmp_path) as chk:
+            for name in chk.variables:
+                arr = np.array(chk[name][:])
+                if arr.dtype.kind == "f" and np.isnan(arr).any():
+                    raise ValueError(f"{name} contains NaN")
+            if natveg_mask is not None and "PCT_NAT_PFT" in chk.variables:
+                s = np.array(chk["PCT_NAT_PFT"][:]).sum(axis=1)
+                err = np.abs(s[np.broadcast_to(natveg_mask[None, :, :], s.shape)] - 100.0)
+                if err.size and err.max() > 1e-3:
+                    raise ValueError(f"PCT_NAT_PFT sum-to-100 max|err|={err.max():.6g} over natveg>0")
+    except Exception:
+        # Leave the tmp file for post-mortem; just never promote it.
+        raise
+
+    os.replace(tmp_path, out_path)
 
 
 def group_sum(pft, idx):
@@ -191,6 +226,8 @@ for ssp in SSPS:
         years = np.array(ds["YEAR"][:])
         default_pft = np.array(ds["PCT_NAT_PFT"][:])            # (time, natpft, lat, lon)
         default_harvest = {v: np.array(ds[v][:]) for v in HARVEST_VARS}
+        # Independent, time-invariant validation mask (see clone_structure).
+        natveg_mask = np.array(ds["PCT_NATVEG"][:]) > 0
     ntime = years.size
 
     r = ramp(years)                                              # (time,)
@@ -221,13 +258,19 @@ for ssp in SSPS:
                      f"RF (reforestation): grass-only reforestation of the 1850-vs-2023 forest "
                      f"deficit, capped per-cell at min(deficit, 2023 grass). Ramped linearly "
                      f"{RAMP_START_YEAR}-{RAMP_END_YEAR}, then held through 2100 as Default plus "
-                     f"that increment. Note the increment is additionally clipped each year to "
-                     f"the grass Default actually has that year, so RF-Default is slightly below "
-                     f"the nominal target where the SSP trajectory has already shrunk grass "
-                     f"(forest is credited the actually-removed grass, keeping sum-to-100 exact). "
+                     f"that increment. IMPORTANT: the per-grass-PFT debit is additionally "
+                     f"clipped each year to the grass Default actually holds that year, and "
+                     f"forest is credited only the actually-removed grass (this is what keeps "
+                     f"sum-to-100 exact). Because the target is built from 2023 grass while "
+                     f"Default's own trajectory keeps converting grass to forest, the achieved "
+                     f"increment falls short of nominal and KEEPS FALLING after the ramp ends: "
+                     f"measured for SSP1_RCP19, 98.9% of nominal at 2035, 89.5% at 2050, 83.3% "
+                     f"at 2075, 79.3% at 2100. RF-Default is therefore NOT a constant management "
+                     f"increment -- do not describe it as one. "
                      f"Tree sub-PFT split by 1850 local forest composition; grass "
                      f"debit split by 2023 local grass composition. HARVEST_* unchanged from "
-                     f"Default. Built {os.path.basename(__file__)}, definitions locked 2026-08-19.")
+                     f"Default. Built {os.path.basename(__file__)}, definitions locked 2026-08-19.",
+                     natveg_mask=natveg_mask)
     print(f"[RF] wrote {out_rf}")
 
     # ---------------- DF ----------------
@@ -249,7 +292,8 @@ for ssp in SSPS:
                      f"grass=0), locked at zero -- never regrows. HARVEST_* zeroed. This is a "
                      f"deliberate, unrestricted theoretical upper bound for Default-DF "
                      f"'avoiding deforestation' accounting -- not an implementable scenario. "
-                     f"Built {os.path.basename(__file__)}, definitions locked 2026-08-19.")
+                     f"Built {os.path.basename(__file__)}, definitions locked 2026-08-19.",
+                     natveg_mask=natveg_mask)
     print(f"[DF] wrote {out_df}")
 
     # ---------------- RH ----------------
@@ -262,20 +306,28 @@ for ssp in SSPS:
                      f"/1.5); the equivalent rotation-interval statement for a halved rate is a "
                      f"DOUBLED interval, not a 50% longer one. PCT_NAT_PFT unchanged from "
                      f"Default. Built {os.path.basename(__file__)}, definitions locked "
-                     f"2026-08-19 (RH ratio revised to 0.5 same day).")
+                     f"2026-08-19 (RH ratio revised to 0.5 same day).",
+                     natveg_mask=natveg_mask)
     print(f"[RH] wrote {out_rh}")
 
-    # ---------------- validation (read-back, must not error) ----------------
-    for path, label in [(out_rf, "RF"), (out_df, "DF"), (out_rh, "RH")]:
-        ds = nc4.Dataset(path)
-        for v in ["PCT_NAT_PFT"] + HARVEST_VARS:
-            arr = np.array(ds[v][:])
-            assert not np.isnan(arr).any(), f"{label} {v}: NaN on read-back"
-        s = np.array(ds["PCT_NAT_PFT"][:]).sum(axis=1)
-        land = s > 0
-        max_err = float(np.abs(s[land] - 100).max()) if land.any() else 0.0
-        print(f"[{label}] read-back OK; PCT_NAT_PFT sum-to-100 max|err|={max_err:.6f}")
-        ds.close()
+    # ---------------- validation ----------------
+    # Read-back integrity and sum-to-100 (under the PCT_NATVEG mask) are
+    # already enforced inside clone_structure, which refuses to promote a
+    # file that fails them. What follows is scenario-specific semantics.
+
+    # RF: report achieved increment vs nominal target. This is expected to be
+    # below 100% and to keep declining after the ramp ends, because the target
+    # is built from 2023 grass while Default keeps converting grass to forest.
+    with nc4.Dataset(out_rf) as ds:
+        rf_forest = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
+    default_forest_chk = group_sum(default_pft, TREE_PFT)
+    nominal = full_increment.sum()
+    for y in (RAMP_END_YEAR, int(years[-1])):
+        i = int(np.where(years == y)[0][0])
+        achieved = float((rf_forest[i] - default_forest_chk[i]).sum())
+        pct = 100.0 * achieved / nominal if nominal else float("nan")
+        print(f"[RF] {y}: achieved increment {achieved:.1f} of nominal {nominal:.1f} ({pct:.1f}%)")
+    del rf_forest, default_forest_chk
 
     with nc4.Dataset(out_df) as ds:
         tree_check = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
