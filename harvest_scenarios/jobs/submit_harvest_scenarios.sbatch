@@ -39,6 +39,20 @@
 # 77x17x324x504 float64 array (~1.7GB) per file; an earlier interactive
 # login-node run of this pipeline was OOM-killed (exit 137).
 
+# No `module load` here, deliberately -- do not add any.
+#   1. ~/.bashrc returns early for non-interactive shells (`case $- in *i*)`),
+#      so its module loads never apply to a batch job anyway.
+#   2. The conda env below is fully self-contained: verified with `env -i`
+#      (completely empty environment, no PATH/LD_LIBRARY_PATH, no modules)
+#      that it imports numpy and netCDF4 and runs fine, using its own bundled
+#      libnetcdf 4.10.0 / libhdf5 2.1.0.
+#   3. Loading ~/.bashrc's modules would actively risk breaking it: they carry
+#      hdf5/1.14.5-mpi and netcdf-c/4.9.2-mpi-h5f, different (and for HDF5,
+#      major-version-different) from what this python links against, and
+#      LD_LIBRARY_PATH injection of a mismatched libhdf5 is a classic failure.
+#      Those modules exist to build ELM/PFLOTRAN, not to run this env.
+# This matches every other working sbatch in this project (jobs/submit_*.sbatch),
+# all of which invoke this same absolute python path with no modules loaded.
 set -euo pipefail
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export OPENBLAS_NUM_THREADS=1

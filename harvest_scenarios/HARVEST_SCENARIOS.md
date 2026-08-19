@@ -255,6 +255,21 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 #SBATCH --array=0-3
 ```
 
+### 环境:不需要任何 module(不要加)
+
+作业脚本里**故意不 load 任何 module**:
+
+1. `~/.bashrc` 对非交互式 shell 会**提前 return**(`case $- in *i*) ;; *) return;;`),
+   所以它里面的 `module load` 对批处理作业**根本不生效**——即使写 `source ~/.bashrc` 也没用。
+2. conda 环境是**完全自包含**的:已用 `env -i`(彻底清空环境,连 `PATH`/`LD_LIBRARY_PATH` 都没有)
+   验证过,能正常 import numpy 和 netCDF4,用的是它自带的 **libnetcdf 4.10.0 / libhdf5 2.1.0**。
+3. **加载 `.bashrc` 里那些 module 反而有破坏风险**:那边是 `hdf5/1.14.5-mpi` 和
+   `netcdf-c/4.9.2-mpi-h5f`,与本 python 链接的版本不同(HDF5 甚至跨了大版本:1.14 vs 2.1),
+   通过 `LD_LIBRARY_PATH` 注入不匹配的 libhdf5 是典型的动态链接故障场景。
+   那些 module 是给**编译 ELM/PFLOTRAN** 用的,不是给这个 python 环境用的。
+
+本项目 `jobs/` 下所有已跑通的 sbatch 脚本都是同一模式(绝对路径 conda python + 零 module)。
+
 ### 并行(job array)说明
 
 脚本的 per-SSP 循环体**完全独立**(共享输入只读,输出文件名互不重叠),所以按 SSP 拆成
