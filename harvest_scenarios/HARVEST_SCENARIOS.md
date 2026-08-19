@@ -238,9 +238,10 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 
 | 项目 | 值 | 依据 |
 |---|---|---|
+| `--array` | **0-3** | 一个 SSP 一个 task(索引对应脚本里的 `ALL_SSPS`)。见下方并行说明 |
 | `-c`(核数) | **1** | 脚本里 `OPENBLAS_NUM_THREADS=1`/`OMP_NUM_THREADS=1` 已关掉 numpy 多线程,没有 `multiprocessing`,没有子进程,netCDF4/HDF5 默认也不开线程——**没有任何一步能用上第二个核** |
-| `--mem` | **64g** | 峰值实际估计只有几 GB(最大数组约 1.7GB,且 4 个 SSP 是**串行**处理,不会跨 SSP 累积)。64g 是用户判断保留的安全边际,不是核算出的最优值 |
-| `-t`(墙钟) | **04:00:00** | 旧的单 SSP(3 情景)版本给了 3 小时余量(实际预计几分钟到十几分钟量级)。本版工作量 ×4(4 个 SSP 串行),提到 4 小时保持同等余量——**不是因为 3 小时被证明不够** |
+| `--mem` | **64g** | 峰值实际估计只有几 GB(最大数组约 1.7GB)。64g 是刻意保留的安全边际,不是核算出的最优值。**按 task 计** |
+| `-t`(墙钟) | **04:00:00** | **未实测**——本版从未跑过。每个 array task 只做 1 个 SSP(3 个文件),4 小时余量非常充足。有真实运行时间后再收紧 |
 
 ```bash
 #SBATCH -A hpcl-cli185
@@ -251,7 +252,30 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 #SBATCH -c 1
 #SBATCH --mem=64g
 #SBATCH -t 04:00:00
+#SBATCH --array=0-3
 ```
+
+### 并行(job array)说明
+
+脚本的 per-SSP 循环体**完全独立**(共享输入只读,输出文件名互不重叠),所以按 SSP 拆成
+4 个 array task 是安全的。脚本接受一个可选参数选择单个 SSP:
+
+```bash
+build_harvest_scenarios.py              # 4 个 SSP 串行(不传参)
+build_harvest_scenarios.py 2            # 只做 ALL_SSPS[2]
+build_harvest_scenarios.py SSP2_RCP45   # 同上,按名字
+```
+
+> **加速幅度存疑,不要期待 4 倍**:这个任务是**写 I/O 密集**而非 CPU 密集——
+> `clone_structure` 每产出一个文件要完整读一遍源文件再写出一个**未压缩**的 2.2G 经典格式文件,
+> 12 个文件合计约 **26G 写入 + 26G 读取**,而计算本身只是几遍 elementwise 运算。
+> 4 个 task 并发访问同一个 NFS 文件系统(且该文件系统已 99% 满)可能是**争抢**而不是线性扩展。
+>
+> **可靠的收益是故障隔离**:某个 SSP 失败不再拖垮其余三个,重跑也只需
+> `sbatch --array=<i> jobs/submit_harvest_scenarios.sbatch` 补那一个。
+>
+> 想改回单作业串行:删掉 `--array` 那行,并去掉 python 调用后面的
+> `"${SLURM_ARRAY_TASK_ID}"` 参数即可。
 
 ---
 
@@ -276,6 +300,10 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 ```bash
 ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/harvest_scenarios && sbatch jobs/submit_harvest_scenarios.sbatch"
 ```
+
+提交后是 4 个 array task(每个 SSP 一个),日志在
+`../outputs/logs/harvest_scenarios_<jobid>_<task>.{out,err}`。
+只重跑某一个 SSP:`sbatch --array=2 jobs/submit_harvest_scenarios.sbatch`。
 
 脚本自带验证输出,但独立复核更稳。跑完之后建议核对:
 

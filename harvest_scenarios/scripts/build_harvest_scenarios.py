@@ -48,8 +48,14 @@ assignment. Never open a compressed/chunked NetCDF4 template with 'r+' and
 edit in place -- that corrupts the file (same failure class as
 future_climate/README_cpl_bypass_future.md sec 6.1; see
 harvest_scenarios/HARVEST_SCENARIOS.md sec 3 for this project's own case).
+
+Usage:
+    build_harvest_scenarios.py            # all 4 SSPs, sequentially
+    build_harvest_scenarios.py 2          # only ALL_SSPS[2], for Slurm job arrays
+    build_harvest_scenarios.py SSP2_RCP45 # same, by name
 """
 import os
+import sys
 import numpy as np
 import netCDF4 as nc4
 
@@ -62,7 +68,26 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # SSP4_RCP60 deliberately excluded -- no matching climate forcing exists in
 # TESSFA, SSP3-7.0 already substitutes for it project-wide (see
 # seus_task_backlog memory).
-SSPS = ["SSP1_RCP19", "SSP2_RCP45", "SSP3_RCP70", "SSP5_RCP85"]
+ALL_SSPS = ["SSP1_RCP19", "SSP2_RCP45", "SSP3_RCP70", "SSP5_RCP85"]
+
+# Optional CLI arg selects a single SSP (index or name) so the 4 SSPs can be
+# run as a Slurm job array -- the per-SSP loop body is fully independent
+# (shared inputs are read-only, outputs have disjoint filenames). With no
+# arg, all 4 run sequentially in one process.
+if len(sys.argv) > 1:
+    sel = sys.argv[1]
+    if sel.isdigit():
+        i = int(sel)
+        if not 0 <= i < len(ALL_SSPS):
+            sys.exit(f"SSP index {i} out of range 0..{len(ALL_SSPS)-1}")
+        SSPS = [ALL_SSPS[i]]
+    elif sel in ALL_SSPS:
+        SSPS = [sel]
+    else:
+        sys.exit(f"unknown SSP {sel!r}; expected one of {ALL_SSPS} or an index 0..{len(ALL_SSPS)-1}")
+else:
+    SSPS = list(ALL_SSPS)
+print(f"[setup] building scenarios for: {', '.join(SSPS)}")
 
 HARVEST_VARS = ["HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3"]
 
@@ -267,4 +292,4 @@ for ssp in SSPS:
                   f"(expect {RH_SCALE})"
                   if so else f"[RH] {v}: default_total=0 (SEUS-wide zero, ratio undefined)")
 
-print("\nAll 4 SSPs x 3 scenarios (12 files) written to", OUT_DIR)
+print(f"\nDone: {len(SSPS)} SSP(s) x 3 scenarios = {len(SSPS)*3} files written to {OUT_DIR}")
