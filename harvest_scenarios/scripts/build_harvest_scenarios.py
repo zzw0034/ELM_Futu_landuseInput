@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Build the 12 management-scenario landuse.timeseries files: Reforestation
-(RF), Deforestation counterfactual (DF), Reduced-Harvest (RH), x 4 SSPs
-(SSP1_RCP19, SSP2_RCP45, SSP3_RCP70, SSP5_RCP85).
+"""Build the 9 management-scenario landuse.timeseries files: one shared
+Reforestation (RF) file plus per-SSP Deforestation counterfactual (DF) and
+Reduced-Harvest (RH) files for SSP1_RCP19, SSP2_RCP45, SSP3_RCP70, SSP5_RCP85.
 
 Definitions locked 2026-08-19 -- see project memory
 seus_management_scenarios_rf_df_rh.md for the full derivation/rationale.
@@ -14,16 +14,19 @@ and sub-PFT allocation), nothing referenced them, and they were deleted
 2026-08-19 to avoid confusion with this version's 12 outputs in the same
 directory. The old script remains recoverable at git commit dd82b07.
 
-  RF: reforest currently-existing GRASS ONLY (never cropland) in cells where
-      1850 forest exceeded 2023 forest, ramped linearly 2024->2050, held as
-      Default + fixed increment for 2051-2100. Restricted to grass because
-      the proposal frames RF as something "potentially used for carbon
-      offset projects" -- it needs to be a credible, implementable
-      intervention (real programs target marginal/abandoned land, not
-      productive cropland). Forest gained is split across the 8 tree
-      sub-PFTs by each cell's own 1850 forest composition; grass given up is
-      split across the 3 grass sub-PFTs by each cell's own 2023 grass
-      composition.
+  RF: a SCENARIO-INDEPENDENT policy prescription, so ONE file serves all
+      four SSP runs. Starting from the shared 2023 historical anchor, forest
+      is restored toward the 1850 extent -- per cell by min(1850 deficit,
+      2023 grass) -- linearly over 2024-2050, then held constant to 2100.
+      GRASS ONLY: cropland is never converted, which caps the target at
+      82.5% of the full 1850 extent; this keeps RF a credible offset-style
+      intervention (real programs target marginal land, not productive
+      cropland). All other PFTs are frozen at 2023, and all five HARVEST_*
+      are ZERO -- restoring forest also means protecting it, and zeroing
+      harvest is what removes the last scenario-specific field and makes a
+      single shared file correct. Trees gained are split by each cell's 1850
+      forest composition, grass given up by its 2023 grass composition.
+      Interpretation caveats live in the scenario_note written into the file.
   DF: NOT frozen/protected forest -- the opposite: instantaneously clear
       ALL forest every year from 2024, route it to grass (by the same local
       2023 grass-composition weights), lock at zero through 2100 (never
@@ -219,6 +222,109 @@ print(f"[setup] grass-split fallback applies to {n_fallback} forested cells with
 print(f"[setup] RF target area (sum of full_increment, %-of-cell units): {full_increment.sum():.1f}")
 
 
+# ============================ RF (built once, shared by all four SSPs) ======
+# RF is a SCENARIO-INDEPENDENT prescription, so exactly one file is produced
+# and every SSP's RF run points at it. This is safe: the four Default files
+# were verified to differ ONLY in PCT_NAT_PFT and the five HARVEST_* fields
+# (everything else, GRAZING included, is bit-identical), and RF overrides
+# precisely those -- so the result does not depend on which file is used as
+# the structural template.
+#
+# HARVEST_* is set to ZERO. Reforestation here means restoring AND protecting
+# forest, so no wood is harvested. Note what that implies for interpretation:
+# the harvest ban applies to ALL forest, including the ~4.65e6 (%-of-cell
+# units) already standing in 2023, not only the ~8.2e5 newly planted -- about
+# 6.7x more area. So RF-Default measures reforestation PLUS a region-wide
+# harvest ban, not reforestation alone, and it overlaps RH (which halves the
+# same harvest). Report it as "forest restoration and protection", and if the
+# reforestation term alone is needed, decompose it against RH.
+# This also makes RF and DF a symmetric pair of bookends: maximum forest
+# carbon vs zero forest carbon, both unharvested, with Default in between.
+rf_template = os.path.join(DEFAULT_DIR,
+                           f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ALL_SSPS[0]}_simyr2024-2100.nc")
+with nc4.Dataset(rf_template) as ds:
+    years = np.array(ds["YEAR"][:])
+    natveg_mask = np.array(ds["PCT_NATVEG"][:]) > 0
+ntime = years.size
+r = ramp(years)
+increment_target = full_increment[None, :, :] * r[:, None, None]
+
+if ALL_SSPS[0] in SSPS:
+    # RF's land cover is SCENARIO-INDEPENDENT by design: it is a policy
+    # prescription ("restore forest toward the 1850 extent by 2050, then hold
+    # it"), not a perturbation layered on each SSP's own land trajectory. So
+    # PCT_NAT_PFT is built from the 2023 historical anchor and evolves only
+    # through the forest<->grass exchange; every other PFT stays frozen at
+    # 2023. The result is byte-identical across all four SSPs.
+    #
+    # Why not "Default + increment" (the earlier design): there, each SSP's
+    # own trajectory competed for the same grass, so the delivered increment
+    # decayed after the ramp (measured: only 71.6-95.2% of nominal by 2100,
+    # scenario-dependent). A policy target should not shrink because the
+    # baseline world happens to reforest on its own. Note the consequence:
+    # RF - Default now mixes the intervention with the removal of that SSP's
+    # own land-use drift, and that drift is large and sign-varying across
+    # scenarios (2100 forest vs 2023: SSP2-4.5 +635671, SSP3-7.0 -190237).
+    # Both must be reported; see HARVEST_SCENARIOS.md.
+    #
+    # No clipping is possible here, by construction: the debit from grass PFT
+    # k is full_increment * ramp * w_grass_k <= grass_2023 * w_grass_k =
+    # p_2023[k], so RF grass can reach zero but never goes negative, and the
+    # trees gain exactly what the grass gives up (sum-to-100 exact).
+    #
+    # HARVEST_* is zeroed (see the section header): restoring forest also
+    # means protecting it. Zeroing rather than inheriting is also what makes
+    # a single shared file correct -- harvest is the only remaining field
+    # that differs between the four Defaults (HARVEST_SH1 totals 44992 /
+    # 63829 / 51579 / 60317 for ssp119/245/370/585, a 42% spread), so once
+    # it is zero, nothing scenario-specific is left.
+    rf_pft = np.broadcast_to(pft_2023[None, :, :, :], (ntime,) + pft_2023.shape).copy()
+    for k in GRASS_PFT:
+        rf_pft[:, k, :, :] = pft_2023[k][None, :, :] - increment_target * w_grass[k][None, :, :]
+    for k in TREE_PFT:
+        rf_pft[:, k, :, :] = pft_2023[k][None, :, :] + increment_target * w_tree[k][None, :, :]
+    neg = float(rf_pft.min())
+    if neg < -1e-9:
+        raise ValueError(f"RF produced a negative PFT fraction ({neg:g}) -- check the weights")
+    # Cells where grass is fully consumed land on 0 but can come out at -7e-15
+    # from the subtraction. Harmless numerically, but do not hand ELM a
+    # negative area fraction; the clip costs ~1e-14 of sum-to-100.
+    np.clip(rf_pft, 0.0, None, out=rf_pft)
+
+    out_rf = os.path.join(OUT_DIR, "landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc")
+    rf_overrides = {"PCT_NAT_PFT": rf_pft}
+    rf_overrides.update({v: np.zeros((ntime,) + full_increment.shape) for v in HARVEST_VARS})
+    clone_structure(rf_template, out_rf, rf_overrides,
+                     f"RF (reforestation): a SCENARIO-INDEPENDENT policy prescription. "
+                     f"PCT_NAT_PFT starts from the 2023 historical anchor and restores forest "
+                     f"toward the 1850 extent, per cell by min(1850 deficit, 2023 grass), "
+                     f"linearly over {RAMP_START_YEAR}-{RAMP_END_YEAR}, then HELD CONSTANT to "
+                     f"2100. Grass-only: cropland is never converted, so the target reaches "
+                     f"82.5% of the full 1850 forest extent (820075 of 994213 in %-of-cell "
+                     f"units). All non-tree, non-grass PFTs are frozen at their 2023 values, "
+                     f"and ALL FIVE HARVEST_* fields are ZERO -- restoring forest also means "
+                     f"protecting it. This single file is therefore shared by all four SSP "
+                     f"runs; nothing scenario-specific remains. "
+                     f"TWO CAUTIONS for interpretation. (1) The harvest ban covers ALL forest, "
+                     f"including the ~4.65e6 already standing in 2023, not just the ~8.2e5 "
+                     f"newly planted (~6.7x more area), so RF-Default measures reforestation "
+                     f"PLUS a region-wide harvest ban and overlaps RH, which halves the same "
+                     f"harvest; report it as 'forest restoration and protection' and decompose "
+                     f"against RH if the reforestation term alone is needed. (2) RF replaces "
+                     f"rather than perturbs the SSP land trajectory, so RF-Default also absorbs "
+                     f"that SSP's own land-use drift (2100 forest vs 2023: SSP1 +314760, "
+                     f"SSP2 +635671, SSP3 -190237, SSP5 +127547). "
+                     f"Tree sub-PFT split by 1850 local forest composition; grass debit by 2023 "
+                     f"local grass composition. Built {os.path.basename(__file__)}, "
+                     f"RF redefined 2026-08-19.",
+                     natveg_mask=natveg_mask)
+    print(f"[RF] wrote {out_rf}")
+
+    del rf_pft, rf_overrides
+else:
+    print(f"[RF] skipped -- RF is scenario-independent and is built by the "
+          f"{ALL_SSPS[0]} task; run --array=0 (or no argument) to produce it")
+
 for ssp in SSPS:
     print(f"\n=== {ssp} ===")
     default_path = os.path.join(DEFAULT_DIR, f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ssp}_simyr2024-2100.nc")
@@ -231,47 +337,7 @@ for ssp in SSPS:
     ntime = years.size
 
     r = ramp(years)                                              # (time,)
-    increment_target = full_increment[None, :, :] * r[:, None, None]   # (time, lat, lon), desired debit
-
-    # ---------------- RF ----------------
-    # Debit grass sub-PFTs first, clipped to what Default actually has that
-    # year (guards against the rare case where Default's own SSP trajectory
-    # has already shrunk a grass sub-PFT below its 2023 value by some future
-    # year -- clipping here keeps PCT_NAT_PFT sum-to-100 exact by construction,
-    # since forest only gains exactly what grass gives up).
-    grass_removed = np.zeros((ntime,) + full_increment.shape)
-    rf_pft = default_pft.copy()
-    for k in GRASS_PFT:
-        desired = increment_target * w_grass[k][None, :, :]
-        removed_k = np.minimum(desired, default_pft[:, k, :, :])
-        rf_pft[:, k, :, :] = default_pft[:, k, :, :] - removed_k
-        grass_removed += removed_k
-    n_clipped = int((grass_removed < increment_target - 1e-9).sum())
-    if n_clipped:
-        print(f"[RF] grass-debit clipped below target in {n_clipped} (cell,year) combos "
-              f"-- Default's own grass fell short of the 2023-based target that year")
-    for k in TREE_PFT:
-        rf_pft[:, k, :, :] = default_pft[:, k, :, :] + grass_removed * w_tree[k][None, :, :]
-
-    out_rf = os.path.join(OUT_DIR, f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ssp}_RF_simyr2024-2100.nc")
-    clone_structure(default_path, out_rf, {"PCT_NAT_PFT": rf_pft},
-                     f"RF (reforestation): grass-only reforestation of the 1850-vs-2023 forest "
-                     f"deficit, capped per-cell at min(deficit, 2023 grass). Ramped linearly "
-                     f"{RAMP_START_YEAR}-{RAMP_END_YEAR}, then held through 2100 as Default plus "
-                     f"that increment. IMPORTANT: the per-grass-PFT debit is additionally "
-                     f"clipped each year to the grass Default actually holds that year, and "
-                     f"forest is credited only the actually-removed grass (this is what keeps "
-                     f"sum-to-100 exact). Because the target is built from 2023 grass while "
-                     f"Default's own trajectory keeps converting grass to forest, the achieved "
-                     f"increment falls short of nominal and KEEPS FALLING after the ramp ends: "
-                     f"measured for SSP1_RCP19, 98.9% of nominal at 2035, 89.5% at 2050, 83.3% "
-                     f"at 2075, 79.3% at 2100. RF-Default is therefore NOT a constant management "
-                     f"increment -- do not describe it as one. "
-                     f"Tree sub-PFT split by 1850 local forest composition; grass "
-                     f"debit split by 2023 local grass composition. HARVEST_* unchanged from "
-                     f"Default. Built {os.path.basename(__file__)}, definitions locked 2026-08-19.",
-                     natveg_mask=natveg_mask)
-    print(f"[RF] wrote {out_rf}")
+    increment_target = full_increment[None, :, :] * r[:, None, None]   # (time, lat, lon)
 
     # ---------------- DF ----------------
     default_forest = group_sum(default_pft, TREE_PFT)   # (time, lat, lon)
@@ -315,19 +381,28 @@ for ssp in SSPS:
     # already enforced inside clone_structure, which refuses to promote a
     # file that fails them. What follows is scenario-specific semantics.
 
-    # RF: report achieved increment vs nominal target. This is expected to be
-    # below 100% and to keep declining after the ramp ends, because the target
-    # is built from 2023 grass while Default keeps converting grass to forest.
-    with nc4.Dataset(out_rf) as ds:
-        rf_forest = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
-    default_forest_chk = group_sum(default_pft, TREE_PFT)
-    nominal = full_increment.sum()
-    for y in (RAMP_END_YEAR, int(years[-1])):
-        i = int(np.where(years == y)[0][0])
-        achieved = float((rf_forest[i] - default_forest_chk[i]).sum())
-        pct = 100.0 * achieved / nominal if nominal else float("nan")
-        print(f"[RF] {y}: achieved increment {achieved:.1f} of nominal {nominal:.1f} ({pct:.1f}%)")
-    del rf_forest, default_forest_chk
+    # RF vs THIS baseline. The RF trajectory itself is met exactly by
+    # construction, so the number worth printing is the gap to each SSP's own
+    # baseline -- that is what the paper has to interpret, and it differs a
+    # lot between scenarios because the baselines drift in opposite
+    # directions. Read from the shared RF file, which every SSP run uses.
+    shared_rf = os.path.join(OUT_DIR, "landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc")
+    if os.path.exists(shared_rf):
+        with nc4.Dataset(shared_rf) as ds:
+            rf_forest = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
+        default_forest_chk = group_sum(default_pft, TREE_PFT)
+        f2023 = float(group_sum(pft_2023, TREE_PFT).sum())
+        print(f"[RF] prescribed target {full_increment.sum():.1f} on a 2023 base of "
+              f"{f2023:.1f} -> plateau {f2023 + full_increment.sum():.1f} from {RAMP_END_YEAR}")
+        for y in (RAMP_END_YEAR, int(years[-1])):
+            i = int(np.where(years == y)[0][0])
+            rf_y = float(rf_forest[i].sum())
+            df_y = float(default_forest_chk[i].sum())
+            print(f"[RF] {y}: RF forest {rf_y:.1f} | {ssp} baseline {df_y:.1f} | "
+                  f"RF-baseline {rf_y - df_y:+.1f}")
+        del rf_forest, default_forest_chk
+    else:
+        print(f"[RF] shared RF file not present yet; run the {ALL_SSPS[0]} task to build it")
 
     with nc4.Dataset(out_df) as ds:
         tree_check = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
@@ -344,4 +419,7 @@ for ssp in SSPS:
                   f"(expect {RH_SCALE})"
                   if so else f"[RH] {v}: default_total=0 (SEUS-wide zero, ratio undefined)")
 
-print(f"\nDone: {len(SSPS)} SSP(s) x 3 scenarios = {len(SSPS)*3} files written to {OUT_DIR}")
+n_rf = 1 if ALL_SSPS[0] in SSPS else 0
+print(f"\nDone: {len(SSPS)} SSP(s) x 2 per-SSP scenarios (DF, RH) + {n_rf} shared RF "
+      f"= {len(SSPS)*2 + n_rf} files written to {OUT_DIR}")
+print("Full set is 4 SSP x 2 + 1 shared RF = 9 files.")

@@ -1,11 +1,13 @@
 # Management 情景构建 —— RF / DF / RH
 
 在已有的 4 个 SSP `landuse.timeseries`(2024-2100,见 `../FUTURE_LANDUSE_TIMESERIES.md`)基础上,
-再做 3 个额外的土地管理干预情景:**RF(重造林)**、**DF(毁林反事实)**、**RH(采伐减半)**,
-覆盖全部 4 个 SSP,共 **12 个文件**。
+再做 3 个额外的土地管理干预情景:**RF(重造林)**、**DF(毁林反事实)**、**RH(采伐减半)**。
 
-情景定义于 **2026-08-19** 全部锁定(见 §1)。截至本文档写就时,
-**已完成 SSP1_RCP19 一个 SSP 的冒烟测试(3 个文件),其余 3 个 SSP 待跑**(见 §6 状态)。
+**RF 与情景无关,只有 1 个文件、四个 SSP 共用;DF 和 RH 各 SSP 一份。
+合计 1 + 4×2 = 9 个文件。**
+
+情景定义于 **2026-08-19** 锁定(见 §1),其中 RF 当天经过一次重新设计
+(从"Default + 增量"改为情景无关的独立轨迹 + 禁伐)。见 §6 状态。
 
 > **本文档 2026-08-19 全面重写**,替换了 2026-08-18 那版基于
 > `PRESERVE`/`HALFHARVEST_SSP370`/`REFOREST1850` 的旧设计——三个情景的定义全部改变(见 §7)。
@@ -41,85 +43,76 @@ RF/DF 只改 `PCT_NAT_PFT`,RH 只改 5 个 `HARVEST_*`。其余所有场
 PFT 索引约定(见 `../src/elm_landuse/chen_classes.py` 的 `ELM_PFT_NAMES`):
 **tree = natpft 1..8**,**grass = natpft 12,13,14**,crop = natpft 15。
 
-### RF(Reforestation,重造林)
+### RF(Reforestation,重造林)—— 情景无关的单一文件
 
-对每个格点,把 1850 年比 2023 年多出来的那部分森林**只从现有草地**转回来:
+**RF 是一个与情景无关的政策处方,四个 SSP 的 RF run 共用同一个文件。**
+它不是叠加在各 SSP 自身轨迹上的扰动,而是**替换**掉土地覆盖轨迹:
 
 ```
 full_increment(g) = min(forest_1850(g) − forest_2023(g), grass_2023(g))
-ramp(t)           = 2024→2050 线性 0→1(27 年,对齐 2050 net-zero),2051-2100 恒为 1
-increment(g,t)    = full_increment(g) × ramp(t)
+ramp(t)           = 2024→2050 线性 0→1(27 年),2051-2100 恒为 1
 
-RF_forest_k(g,t) = Default_forest_k(g,t) + increment(g,t) × w_tree_k(g)    k ∈ tree 1..8
-w_tree_k(g)      = p(g,k,1850) / forest_1850(g)          按该格点自身 1850 年森林构成分配
+RF_tree_k(g,t)  = p(g,k,2023) + full_increment(g) × ramp(t) × w_tree_k(g)    k ∈ tree 1..8
+w_tree_k(g)     = p(g,k,1850) / forest_1850(g)        按该格点 1850 年森林构成
 
-RF_grass_k(g,t)  = Default_grass_k(g,t) − increment(g,t) × w_grass_k(g)    k ∈ {12,13,14}
-w_grass_k(g)     = p(g,k,2023) / grass_2023(g)           按该格点自身 2023 年草地构成分配
+RF_grass_k(g,t) = p(g,k,2023) − full_increment(g) × ramp(t) × w_grass_k(g)   k ∈ {12,13,14}
+w_grass_k(g)    = p(g,k,2023) / grass_2023(g)         按该格点 2023 年草地构成
+
+其余 PFT(bare / shrub / crop)= 冻结在 2023 年值
+所有 5 个 HARVEST_*            = 0
 ```
 
-**2051-2100 不是独立冻结的状态**,而始终是 `Default(t) + 增量`,
-所以 `RF(t) − Default(t)` 在任意时刻都等于"我们主动造的这片林",
-不会被 Default 自身 SSP 轨迹的演化污染。
+**关键量**(%-of-cell 单位):
 
-> **实现上的一个必要偏差:草地扣减要按当年 Default 实际有的量 clip。**
-> `increment(g,t)` 是用 **2023 年**的草地构成算出来的目标,但 Default 自己的 SSP 轨迹
-> 会让草地逐年变化——某些格点到 2050 年草地已经比 2023 年少,"要转的草"不够。
-> 此时只能转实际存在的那部分(`removed_k = min(desired_k, Default_grass_k(g,t))`),
-> **森林增加的量按实际扣到的草地量记**,而不是按目标量记——这样 sum-to-100 才严格守恒。
+| | 值 |
+|---|---:|
+| 1850 年森林 | 5,643,976 |
+| 2023 年森林(= RF 起点) | 4,649,764 |
+| 1850 缺口 | 994,213 |
+| **grass-only 可达目标** | **820,075**(缺口的 82.5%) |
+| **RF 2050 年后的平台值** | **5,469,839** |
+
+**为什么不再是"Default + 增量"**(2026-08-19 改):旧设计里各 SSP 自己的轨迹会和我们抢同一批草地,
+导致交付的增量在 ramp 结束后持续衰减——实测 2100 年只剩名义值的 **71.6%–95.2%**(随情景而异)。
+一个政策目标不该因为基线世界自己也在造林就缩水。新设计从 2023 锚点独立构造,
+**按构造精确达标,不可能 clip**:对草地 PFT k 的扣减是
+`full_increment × ramp × w_grass_k ≤ grass_2023 × w_grass_k = p(k,2023)`,
+所以草地最低到 0 而绝不为负,树增加的正好等于草减少的。
+实测 sum-to-100 误差 **5.68e-14**(机器精度,比 Default 自身的 5.55e-06 还好三个数量级)。
+
+**为什么是单一文件**:已验证四个 Default 文件**只有 `PCT_NAT_PFT` 和 5 个 `HARVEST_*` 不同**
+(其余包括 `GRAZING` 全部逐字节相同)。RF 恰好覆盖这两类——`PCT_NAT_PFT` 用情景无关轨迹,
+`HARVEST_*` 全部置零——**于是没有任何情景相关的内容残留**,一个文件即可服务全部四个 run。
+
+**为什么 `HARVEST_* = 0`**:造林的目的就是恢复**并保护**森林,不再采伐。
+这同时也是单一文件成立的前提(采伐是最后一个情景相关字段)。
+另外这让 **RF 和 DF 构成一对对称的书挡**:最大森林碳储 vs 零森林碳储,两者都不采伐,Default 夹在中间。
+
+> **解读时必须注意的两点(写文章时都要说)**
 >
-> **全域实测(SSP1_RCP19,job 466554_0):590 万 cell-year 中 771,734 个(13.1%)被 clip**,
-> 达成率如下——注意**它在 ramp 结束后仍持续下降**:
+> **(1) 禁伐覆盖的是全部森林,不只是新造的那部分。** `HARVEST_*` 是逐格点速率、作用于该格点
+> 全部木本 PFT,没有地块身份,所以 `HARVEST_*=0` 意味着连 2023 年就已存在的 **4,649,764**
+> 也一起停伐——**是新造林(820,075)面积的 6.7 倍**。因此 `RF − Default` 度量的是
+> **"造林 + 全域禁伐"的合计效应**,不是造林本身,而且它与 **RH 重叠**(RH 是同一批采伐 ×0.5)。
+> 情景名建议写成 **"forest restoration and protection"**;若需要纯造林项,用 RH 做分解
+> (线性假设下 `造林 ≈ (RF−Default) − 2×(RH−Default)`)。
 >
-> | 年份 | 2035 | 2050(ramp 结束) | 2075 | 2100 |
-> |---|---:|---:|---:|---:|
-> | 达成/名义目标 | 98.9% | **89.5%** | 83.3% | **79.3%** |
+> **(2) `RF − Default` 还吸收了各 SSP 自身的土地漂移。** 因为 RF 是替换而非扰动,
+> 差值里含有"该 SSP 本来会发生的土地变化被抹掉"这一项,而这一项**量级大且正负不同**:
 >
-> 这是**正确行为而非缺陷**:不能去转一个情景里已经不存在的草地,否则就得动耕地,
-> 违反 grass-only 约束。但由此产生一条**必须写进论文的性质**:
-> **`RF − Default` 不是恒定的管理增量,2050→2100 会自行衰减约 11 个百分点**,
-> 而这个衰减来自记账约束(草地被 Default 自己用掉了),**不是碳动力学**。
-> 解释造林碳汇时若不说明,会被误读成"造林效果在减弱"。机制详见下方小节。
+> | SSP | 2100 森林 | 相对 2023 |
+> |---|---:|---:|
+> | SSP1-1.9 | 4,964,523 | +314,760 |
+> | SSP2-4.5 | 5,285,435 | **+635,671** |
+> | SSP3-7.0 | 4,459,526 | **−190,237** |
+> | SSP5-8.5 | 4,777,311 | +127,547 |
 >
-> (早前文档写的"低约 4%、再漂移 0.25%"是在**一小块空间窗口 + SSP3-7.0** 上测的,
-> 全域尺度不成立,已废弃。)
+> 跨度 826,145,和造林目标(820,075)几乎一样大。**必须把两项都报告**,让读者能自己拆开。
+> 特别注意 SSP2-4.5:基线 2100 年已达 5,285,435,而 RF 平台是 5,469,839,**只差 184,404**。
 
-#### 衰减的机制:目标锚在 2023,而 Default 自己在消耗草地
-
-先看一个由公式直接推出的事实。ramp 结束后 `increment(g,t) = full_increment(g) = min(deficit, grass_2023)`,
-而分到第 k 个草地 PFT 的目标是
-
-```
-desired_k(g,t) = full_increment(g) × w_grass_k(g)
-               ≤ grass_2023(g) × [p(g,k,2023) / grass_2023(g)]
-               = p(g,k,2023)
-```
-
-也就是说,**我们要的从来不超过该草地 PFT 在 2023 年的量**。所以 clip 只会在一种情况下触发:
-**Default 自己在第 t 年的该草地 PFT 已经少于它 2023 年的值。**
-
-而 SSP1-1.9 恰好就在大规模这么做(实测,%-of-cell 单位):
-
-| 年份 | 2023(基准) | 2024 | 2035 | 2050 | 2075 | 2100 |
-|---|---:|---:|---:|---:|---:|---:|
-| 草地 | 1,840,617 | 1,819,635 | 1,710,266 | 1,661,152 | 1,592,999 | **1,537,565** |
-| 森林 | 4,649,764 | 4,678,803 | 4,824,186 | 4,855,927 | 4,931,554 | **4,964,523** |
-| 耕地 | 931,573 | 923,341 | 886,678 | 903,649 | 894,877 | 916,574 |
-| 相对 2023 的单向草地缺口 | — | 28,952 | 172,185 | 269,698 | 358,330 | **413,520** |
-
-**草地 −303,052,森林 +314,759,耕地基本不动**——Default 自己就在把草地变成森林,几乎一比一。
-SSP1-1.9 是最"绿"的情景,本身就含大量自然/政策造林。
-
-于是形成一个直接的资源竞争:**RF 想转的那块草地,Default 自己已经先转成森林了**。
-年份越靠后,Default 转得越多,留给 RF 的越少,达成率就越低——这正是 79.3% 这个数的来源。
-
-两个推论:
-
-1. **这不是 bug,反而是物理上应该的**:那块地在 Default 里已经是森林了,RF 不该、也无法
-   "再造一次林"。真正的管理增量本来就只剩下 Default 没做掉的那部分。
-2. **不同 SSP 的衰减幅度会不同**,取决于该情景自身的草地→森林转换有多强。SSP1-1.9 是
-   最绿的,预期衰减最大;SSP3-7.0/SSP5-8.5 里 Default 可能反而在毁林,草地不减甚至增加,
-   达成率应该更接近 100%。**四个 SSP 跑完后要把这张达成率表逐个补上**,不能用
-   SSP1-1.9 的数字代表全部。脚本现在会为每个 SSP 打印 2050 和 2100 的达成率。
+**这个设计带来的一个独有能力**:四个 RF run 共用同一片陆面,**唯一差别是气候**——
+所以 `Sim_SSPxx_RF` 之间互比是一个**纯净的气候效应对比**(同一片恢复后的森林在不同气候下固碳)。
+旧设计做不到这一点,因为四个 RF 的陆面各不相同。
 
 **为什么基准是 1850 而不是 1985**:实测 SEUS 数据,1985 vs 2023 森林面积净变化只有
 **−0.28%**,单向 gross loss(22,824 km²)≈ gross gain(20,545 km²),76,582 个陆地格点里
@@ -153,6 +146,14 @@ SSP1-1.9 是最"绿"的情景,本身就含大量自然/政策造林。
 27 年渐变让每年的稀释扰动只有 1/27。
 **写作时必须保留的 caveat**:ELM 每个 gridcell 每个 PFT 只有一个 patch,没有林龄结构
 (除非用 FATES),所以新造林永远和现有成熟林**平均**成一个密度——渐变只能减小这个假象,不能消除。
+
+**论文可用的一句话**:
+
+> The forest restoration and protection scenario prescribes a common land-management
+> trajectory across all SSPs: forest cover is restored from the shared 2023 baseline
+> toward the 1850 forest extent by 2050 using available grassland only (reaching 82.5%
+> of the 1850 extent under the no-cropland constraint), held constant thereafter, with
+> wood harvest disabled across all forest throughout the simulation.
 
 ### DF(Deforestation counterfactual,毁林反事实)
 
@@ -228,11 +229,13 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 
 ```
 ../outputs/processed/harvest_scenarios/
-  landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP}_{RF,DF,RH}_simyr2024-2100.nc
+  landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc          # 1 个,四个 SSP 共用
+  landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP}_{DF,RH}_simyr2024-2100.nc   # 每 SSP 各 2 个
 ```
 
-其中 `{SSP}` ∈ `SSP1_RCP19` / `SSP2_RCP45` / `SSP3_RCP70` / `SSP5_RCP85`,
-`{RF,DF,RH}` 三个情景 → 共 **12 个文件**。
+其中 `{SSP}` ∈ `SSP1_RCP19` / `SSP2_RCP45` / `SSP3_RCP70` / `SSP5_RCP85`
+→ 共 **1 + 4×2 = 9 个文件**。**RF 文件名里没有 SSP 标签,这是刻意的**——
+它与情景无关,四个 RF run 的 `flanduse_timeseries` 都指向同一个路径。
 
 每个文件都是对应 SSP Default 文件的"骨架"复制品——维度/变量/dtype/YEAR 范围
 (2024-2100,77 年)完全一致,只改 `PCT_NAT_PFT` 和/或 `HARVEST_*`。
@@ -331,7 +334,7 @@ build_harvest_scenarios.py SSP2_RCP45   # 同上,按名字
 
 > **加速幅度存疑,不要期待 4 倍**:这个任务是**写 I/O 密集**而非 CPU 密集——
 > `clone_structure` 每产出一个文件要完整读一遍源文件再写出一个**未压缩**的 2.2G 经典格式文件,
-> 12 个文件合计约 **26G 写入 + 26G 读取**,而计算本身只是几遍 elementwise 运算。
+> 9 个文件合计约 **20G 写入 + 20G 读取**,而计算本身只是几遍 elementwise 运算。
 > 4 个 task 并发访问同一个 NFS 文件系统(且该文件系统已 99% 满)可能是**争抢**而不是线性扩展。
 >
 > **可靠的收益是故障隔离**:某个 SSP 失败不再拖垮其余三个,重跑也只需
@@ -348,16 +351,17 @@ build_harvest_scenarios.py SSP2_RCP45   # 同上,按名字
 - 脚本 `scripts/build_harvest_scenarios.py` 和作业 `jobs/submit_harvest_scenarios.sbatch`
   **已按锁定的定义重写**。
 - **冒烟测试(`--array=0`,job `466554_0`,SSP1_RCP19)已 COMPLETED / exit 0**,
-  耗时 00:02:20,MaxRSS 17.6GB,产出 3 个文件(RF/DF/RH),各项校验全绿:
-  sum-to-100 max|err| 6e-06(与 Default 自身相同)、DF 树 PFT 与 5 个 `HARVEST_*` 精确为 0、
+  耗时 00:02:20,MaxRSS 17.6GB,各项校验全绿:sum-to-100、DF 树 PFT 与 `HARVEST_*` 精确为 0、
   RH 比值精确 0.500000、C3/C4 兜底恰好命中预测的 5 个格点。
-- **`../outputs/processed/harvest_scenarios/` 目前只有 SSP1_RCP19 的 3 个文件,
-  其余 3 个 SSP(共 9 个文件)尚未生成。**
-- 冒烟测试之后又改了三处(见 git 历史):`clone_structure` 改为**写临时文件 → 校验 → 原子
-  `os.replace()`**;sum-to-100 校验的 mask 从自指的 `PFT-sum>0` 换成独立的 `PCT_NATVEG>0`;
-  `--mem`/`-t` 换成实测值。**SSP1_RCP19 的 3 个文件是用改动前的版本生成的**——数值逻辑
-  未变(改的只是校验和落盘方式),但如果要求"12 个文件全部由同一版本产出",
-  应连 `--array=0` 一起重跑。
+- **⚠️ 冒烟测试产出的 3 个文件是旧 RF 设计的,已作废**:那一版 RF 还是"Default + 增量"、
+  按 SSP 各一份、且继承 Default 的采伐。RF 于同日重新设计为**情景无关 + 全域禁伐 + 单一文件**,
+  文件名也从 `..._SSP1_RCP19_RF_...` 变成 `..._RF_...`。**跑新版前必须先清掉旧的 3 个文件**,
+  否则会与新产物同目录共存(`SSP1_RCP19_RF` 这个名字尤其容易被误用)。
+- 冒烟测试之后还改了三处:`clone_structure` 改为**写临时文件 → 校验 → 原子 `os.replace()`**;
+  sum-to-100 校验的 mask 从自指的 `PFT-sum>0` 换成独立的 `PCT_NATVEG>0`;
+  `--mem`/`-t` 换成实测值。
+- **RF 由 `--array=0`(即 `ALL_SSPS[0]` 那个 task)产出**,其余 task 会跳过它并打印说明。
+  单独重跑某个 SSP 的 DF/RH 时不会重复生成 RF。
 - **旧设计产出的 3 个文件已于 2026-08-19 17:06 删除**。经过:v1(压缩格式原地改写)产出的
   3 个损坏文件先前已删;v2 脚本(经典格式)最终在 **2026-08-19 14:08 成功跑完**,
   产出 `PRESERVE` / `HALFHARVEST_SSP370` / `REFOREST1850` 三个各 2.2G 的**有效**文件
@@ -365,7 +369,7 @@ build_harvest_scenarios.py SSP2_RCP45   # 同上,按名字
   (`PRESERVE` 与 DF 概念相反、`HALFHARVEST` 系数和 SSP 覆盖都不同、`REFOREST1850`
   缺 grass-only 约束且渐变年数/分树种方式都不同),且无任何 ELM case/run 引用它们
   (已查 `e3sm_cases`/`e3sm_run` 下全部 `user_nl_elm`/`lnd_in`,零命中),
-  留在同一目录里会与新的 12 个文件混淆(尤其 `PRESERVE` 这个名字极易被误当作森林保护情景),
+  留在同一目录里会与新的 9 个文件混淆(尤其 `PRESERVE` 这个名字极易被误当作森林保护情景),
   故删除。**生成它们的旧脚本完整保存在 git commit `dd82b07`**,需要时可复现。
 
 ## 7. 怎么跑
@@ -390,7 +394,7 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 - **RH**:5 个 `HARVEST_*` 对全部 77 年求和后,新/旧比值应精确为 **0.5**。
   **注意不要按单一年份切片算比值**——`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就接近全零
   (见 `../FUTURE_LANDUSE_TIMESERIES.md` §11.3),单年切片可能除以零得到 `nan`,不代表数据错。
-- 全部 12 个文件都要确认**能被完整读回**(不只是写完没报错)——这正是 §4 那次的教训,
+- 全部 9 个文件都要确认**能被完整读回**(不只是写完没报错)——这正是 §4 那次的教训,
   写入"看起来成功"不等于文件没坏。
 
 ---
