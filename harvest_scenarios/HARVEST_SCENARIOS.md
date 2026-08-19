@@ -69,8 +69,12 @@ w_grass_k(g)    = p(g,k,2023) / grass_2023(g)         按该格点 2023 年草�
 | 1850 年森林 | 5,643,976 |
 | 2023 年森林(= RF 起点) | 4,649,764 |
 | 1850 缺口 | 994,213 |
-| **grass-only 可达目标** | **820,075**(缺口的 82.5%) |
-| **RF 2050 年后的平台值** | **5,469,839** |
+| **grass-only 可达目标** | **820,075** = 补上**缺口的 82.5%** |
+| **RF 2050 年后的平台值** | **5,469,839** = 1850 年**森林范围的 96.9%** |
+
+> **两个百分比的分母不同,千万别混**:820,075/994,213 = **82.5%,分母是缺口**;
+> 5,469,839/5,643,976 = **96.9%,分母是 1850 年的森林总量**。
+> 写成"恢复到 1850 extent 的 82.5%"是**错的**(那个数是 96.9%)。
 
 **为什么不再是"Default + 增量"**(2026-08-19 改):旧设计里各 SSP 自己的轨迹会和我们抢同一批草地,
 导致交付的增量在 ramp 结束后持续衰减——实测 2100 年只剩名义值的 **71.6%–95.2%**(随情景而异)。
@@ -151,9 +155,13 @@ w_grass_k(g)    = p(g,k,2023) / grass_2023(g)         按该格点 2023 年草�
 
 > The forest restoration and protection scenario prescribes a common land-management
 > trajectory across all SSPs: forest cover is restored from the shared 2023 baseline
-> toward the 1850 forest extent by 2050 using available grassland only (reaching 82.5%
-> of the 1850 extent under the no-cropland constraint), held constant thereafter, with
-> wood harvest disabled across all forest throughout the simulation.
+> toward the 1850 forest extent by 2050 using available grassland only, held constant
+> thereafter, with wood harvest disabled across all forests throughout the simulation.
+
+必要时再补一句量化(注意分母):
+
+> Under the no-cropland constraint the prescribed restoration closes 82.5% of the
+> 1850-to-2023 forest deficit, bringing forest cover to 96.9% of its 1850 extent.
 
 ### DF(Deforestation counterfactual,毁林反事实)
 

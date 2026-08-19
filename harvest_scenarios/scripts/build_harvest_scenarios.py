@@ -18,8 +18,9 @@ directory. The old script remains recoverable at git commit dd82b07.
       four SSP runs. Starting from the shared 2023 historical anchor, forest
       is restored toward the 1850 extent -- per cell by min(1850 deficit,
       2023 grass) -- linearly over 2024-2050, then held constant to 2100.
-      GRASS ONLY: cropland is never converted, which caps the target at
-      82.5% of the full 1850 extent; this keeps RF a credible offset-style
+      GRASS ONLY: cropland is never converted, which closes 82.5% of the
+      1850 DEFICIT (820075 of 994213), leaving RF at 96.9% of the 1850
+      forest EXTENT itself; this keeps RF a credible offset-style
       intervention (real programs target marginal land, not productive
       cropland). All other PFTs are frozen at 2023, and all five HARVEST_*
       are ZERO -- restoring forest also means protecting it, and zeroing
@@ -299,9 +300,11 @@ if ALL_SSPS[0] in SSPS:
                      f"PCT_NAT_PFT starts from the 2023 historical anchor and restores forest "
                      f"toward the 1850 extent, per cell by min(1850 deficit, 2023 grass), "
                      f"linearly over {RAMP_START_YEAR}-{RAMP_END_YEAR}, then HELD CONSTANT to "
-                     f"2100. Grass-only: cropland is never converted, so the target reaches "
-                     f"82.5% of the full 1850 forest extent (820075 of 994213 in %-of-cell "
-                     f"units). All non-tree, non-grass PFTs are frozen at their 2023 values, "
+                     f"2100. Grass-only: cropland is never converted, so the target closes "
+                     f"82.5% of the 1850 DEFICIT (820075 of 994213 in %-of-cell units), which "
+                     f"puts the 2050+ plateau at 5469839 = 96.9% of the 1850 forest EXTENT "
+                     f"(5643976). Do not conflate those two denominators. "
+                     f"All non-tree, non-grass PFTs are frozen at their 2023 values, "
                      f"and ALL FIVE HARVEST_* fields are ZERO -- restoring forest also means "
                      f"protecting it. This single file is therefore shared by all four SSP "
                      f"runs; nothing scenario-specific remains. "
