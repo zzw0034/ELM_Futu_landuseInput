@@ -21,4 +21,4 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 # script docstring for why this is suspected. The set_fill_off() variant
 # runs FIRST so its number is available even if the default variant runs
 # long and hits walltime.
-$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/scripts/bench_set_fill_off.py
+$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/convertTESSFA2bypass/benchmarks/scripts/bench_set_fill_off.py

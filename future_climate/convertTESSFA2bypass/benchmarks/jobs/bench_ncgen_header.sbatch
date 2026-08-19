@@ -19,4 +19,4 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 # avoiding the single ~37min rewrite that the attribute-ordering fix cannot
 # remove (job 465262)? See the script docstring for the full chain of what
 # has already been ruled in and out.
-$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/scripts/bench_ncgen_header.py
+$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/convertTESSFA2bypass/benchmarks/scripts/bench_ncgen_header.py

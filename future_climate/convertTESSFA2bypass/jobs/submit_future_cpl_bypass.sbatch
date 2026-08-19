@@ -11,7 +11,7 @@
 #SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.out
 #SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/outputs/logs/%x_%j.err
 set -euo pipefail
-cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate
+cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/convertTESSFA2bypass
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export PYTHONUNBUFFERED=1

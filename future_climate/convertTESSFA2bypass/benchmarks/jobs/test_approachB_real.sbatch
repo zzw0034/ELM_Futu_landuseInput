@@ -14,4 +14,4 @@ set -euo pipefail
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
-$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/scripts/test_approachB_real.py
+$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/convertTESSFA2bypass/benchmarks/scripts/test_approachB_real.py

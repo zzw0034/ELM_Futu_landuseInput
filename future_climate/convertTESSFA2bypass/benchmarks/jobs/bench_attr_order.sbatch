@@ -21,4 +21,4 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 # declaration. See the script docstring for what's already been ruled in
 # and out. Walltime is deliberately short -- if a variant needs more than
 # ~45 min for a single attribute step, that is itself the answer.
-$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/scripts/bench_attr_order.py
+$PY -u /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/future_climate/convertTESSFA2bypass/benchmarks/scripts/bench_attr_order.py
