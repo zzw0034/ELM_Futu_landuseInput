@@ -240,8 +240,8 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 |---|---|---|
 | `--array` | **0-3** | 一个 SSP 一个 task(索引对应脚本里的 `ALL_SSPS`)。见下方并行说明 |
 | `-c`(核数) | **1** | 脚本里 `OPENBLAS_NUM_THREADS=1`/`OMP_NUM_THREADS=1` 已关掉 numpy 多线程,没有 `multiprocessing`,没有子进程,netCDF4/HDF5 默认也不开线程——**没有任何一步能用上第二个核** |
-| `--mem` | **64g** | 峰值实际估计只有几 GB(最大数组约 1.7GB)。64g 是刻意保留的安全边际,不是核算出的最优值。**按 task 计** |
-| `-t`(墙钟) | **04:00:00** | **未实测**——本版从未跑过。每个 array task 只做 1 个 SSP(3 个文件),4 小时余量非常充足。有真实运行时间后再收紧 |
+| `--mem` | **24g** | **推导值**(按 task 计)。`PCT_NAT_PFT` = 77×17×324×504 f8 = **1.71GB**,单个 `HARVEST_*` = 100MB。峰值同时存活:`default_pft` 1.71 + `rf_pft` 1.71(**写完 RF 后未释放,DF 阶段仍被引用**)+ `df_pft` 1.71 + 验证段读回 `PCT_NAT_PFT` 1.71 + 三组 `HARVEST_*` 1.50 + 中间量 0.30 + 解释器/numpy/netCDF4 开销 0.30 ≈ **9GB**。24g 留约 2.6 倍余量 |
+| `-t`(墙钟) | **04:00:00** | **仅为首次冒烟测试的占位值,未实测**。跑完 `--array=0` 后必须用实测 elapsed 时间替换,再提交其余 task |
 
 ```bash
 #SBATCH -A hpcl-cli185
@@ -250,7 +250,7 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 1
-#SBATCH --mem=64g
+#SBATCH --mem=24g
 #SBATCH -t 04:00:00
 #SBATCH --array=0-3
 ```
