@@ -1,6 +1,6 @@
 # Harvest 管理情景构建 —— 工作记录（记忆文档）
 
-在已有的 4 个 SSP `landuse.timeseries`(2024-2100,见 `FUTURE_LANDUSE_TIMESERIES.md`)基础上,
+在已有的 4 个 SSP `landuse.timeseries`(2024-2100,见 `../FUTURE_LANDUSE_TIMESERIES.md`)基础上,
 再做 3 个假设性管理干预情景:**保护森林**、**减半采伐**、**重造林**。2026-08-18 规划并写好构建
 脚本,截至本文档写就时**尚未成功运行产出**(见 §5 状态)。
 
@@ -8,10 +8,13 @@
 
 ## 0. 最终成品(计划中,尚未生成)
 
+不在本文件夹内——沿用主项目根目录下现有的 `outputs/` 树(和其余 4 个 SSP landuse.timeseries
+放一起,不是本次整理进 `harvest_scenarios/` 的对象):
+
 ```
-outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_PRESERVE_simyr2024-2100.nc
-outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_HALFHARVEST_SSP370_simyr2024-2100.nc
-outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_REFOREST1850_simyr2024-2100.nc
+../outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_PRESERVE_simyr2024-2100.nc
+../outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_HALFHARVEST_SSP370_simyr2024-2100.nc
+../outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_REFOREST1850_simyr2024-2100.nc
 ```
 
 三个文件都是已有 SSP3-7.0(`landuse.timeseries_SEUS_1_24deg_nlcd2elm_SSP3_RCP70_simyr2024-2100.nc`)
@@ -46,6 +49,11 @@ PCT_NAT_PFT(year) = (1 - alpha) × [2023年状态] + alpha × [1850年状态]
   年 `PCT_NAT_PFT` 锚点,读 `SSP3_RCP70` 未来文件当结构模板,分别算出三份新数据,各自建一个
   全新的输出文件。
 - `jobs/submit_harvest_scenarios.sbatch` —— Slurm 提交脚本(资源配置见 §4)。
+
+2026-08-18 把这两个文件和本文档一起,从项目根目录的 `scripts/`/`jobs/`(以及 Pathfinder 上
+图方便临时放的 `co2_ndep_ssp_forcing/`)整理进这个自成一体的 `harvest_scenarios/` 子目录,
+和 `future_climate/` 的组织方式保持一致(各自有自己的 `scripts/`、`jobs/`)。整理前本地和
+Pathfinder 上这个脚本放的位置并不一致,顺带修正了。
 
 ---
 
@@ -112,7 +120,7 @@ float64 数组,单个就有约 1.7GB,加上前后几个中间数组,峰值内存
 ## 6. 怎么跑
 
 ```bash
-ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput && sbatch jobs/submit_harvest_scenarios.sbatch"
+ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/harvest_scenarios && sbatch jobs/submit_harvest_scenarios.sbatch"
 ```
 
 跑完之后建议核对(脚本自带的验证输出会打印,但独立复核更稳):
@@ -121,7 +129,7 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput &
 - `reforest` 2053 年切片应和历史文件 1850 年锚点逐字节相同,2100 年应和 2053 年相同(保持不变)
 - `half_harvest` 五个 `HARVEST_*` 变量,对全部 77 年求和后新/旧比值应精确为 0.5(注意:不要
   按单一年份切片算比值——`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就接近全零,见
-  `FUTURE_LANDUSE_TIMESERIES.md` §11.3,单年切片可能除以零得到 `nan`,不代表数据错)
+  `../FUTURE_LANDUSE_TIMESERIES.md` §11.3,单年切片可能除以零得到 `nan`,不代表数据错)
 - 三个文件都要确认**能被完整读回**(不只是写完没报错)——这正是 v1 那次的教训,写入"看起来
   成功"不等于文件没坏。
 
@@ -131,5 +139,6 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput &
 
 - `scripts/build_harvest_scenarios.py` —— 构建脚本(v2,经典格式)
 - `jobs/submit_harvest_scenarios.sbatch` —— Slurm 提交脚本
-- `FUTURE_LANDUSE_TIMESERIES.md` —— 上游的 4 个 SSP landuse.timeseries 怎么来的
-- `future_climate/README_cpl_bypass_future.md` §6.1 —— 同一类 NetCDF4 分块写入坑的更早案例
+- `../FUTURE_LANDUSE_TIMESERIES.md` —— 上游的 4 个 SSP landuse.timeseries 怎么来的
+- `../future_climate/README_cpl_bypass_future.md` §6.1 —— 同一类 NetCDF4 分块写入坑的更早案例
+- `../outputs/processed/harvest_scenarios/` —— 产出数据存放位置(不在本文件夹内,见 §0)

@@ -21,7 +21,7 @@ set -euo pipefail
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/co2_ndep_ssp_forcing
+cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/harvest_scenarios/scripts
 $PY build_harvest_scenarios.py
 
 ls -lh /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/processed/harvest_scenarios/
