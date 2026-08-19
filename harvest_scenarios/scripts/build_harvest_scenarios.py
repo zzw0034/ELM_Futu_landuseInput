@@ -237,8 +237,13 @@ print(f"[setup] RF target area (sum of full_increment, %-of-cell units): {full_i
 # units) already standing in 2023, not only the ~8.2e5 newly planted -- about
 # 6.7x more area. So RF-Default measures reforestation PLUS a region-wide
 # harvest ban, not reforestation alone, and it overlaps RH (which halves the
-# same harvest). Report it as "forest restoration and protection", and if the
-# reforestation term alone is needed, decompose it against RH.
+# same harvest). Report it as "forest restoration and protection". The
+# project's decision (2026-08-19) is to claim only the COMBINED effect and
+# not to split it: a clean split needs an extra NH scenario (Default PFT +
+# zero harvest) and the compute budget does not allow it. Note that
+# (RF-Default) - 2*(RH-Default) is a sensitivity check at best, NOT a
+# decomposition -- the carbon response is not linear, and RH's harvest acts
+# on Default's forest area while RF's acts on the restored area.
 # This also makes RF and DF a symmetric pair of bookends: maximum forest
 # carbon vs zero forest carbon, both unharvested, with Default in between.
 rf_template = os.path.join(DEFAULT_DIR,
@@ -312,8 +317,11 @@ if ALL_SSPS[0] in SSPS:
                      f"including the ~4.65e6 already standing in 2023, not just the ~8.2e5 "
                      f"newly planted (~6.7x more area), so RF-Default measures reforestation "
                      f"PLUS a region-wide harvest ban and overlaps RH, which halves the same "
-                     f"harvest; report it as 'forest restoration and protection' and decompose "
-                     f"against RH if the reforestation term alone is needed. (2) RF replaces "
+                     f"harvest; report it as 'forest restoration and protection' and claim only "
+                     f"the COMBINED effect -- a clean split would need an extra NH (Default PFT, "
+                     f"zero harvest) scenario, which this project does not run, and "
+                     f"2x(RH-Default) is a sensitivity check, not a decomposition. "
+                     f"(2) RF replaces "
                      f"rather than perturbs the SSP land trajectory, so RF-Default also absorbs "
                      f"that SSP's own land-use drift (2100 forest vs 2023: SSP1 +314760, "
                      f"SSP2 +635671, SSP3 -190237, SSP5 +127547). "
