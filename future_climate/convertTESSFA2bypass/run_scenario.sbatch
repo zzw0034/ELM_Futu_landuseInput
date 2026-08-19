@@ -17,18 +17,14 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 
-# One scenario, all 7 variables, sequential within this node -- run 4 of
-# these (one per scenario) to get 4 scenarios on 4 separate nodes at once.
-# --exclusive reserves the whole node so Slurm can't pack more than one of
-# these jobs onto the same node.
+# One scenario, all 7 variables, sequentially on one exclusive node.
+# Submit once per scenario to put all four scenarios on four nodes at once.
 #
-# Uses Approach B (11_build_future_cpl_bypass_rowmajor.py) with the ncgen
-# header fix (2026-08-18): the header-rewrite bug that made file creation
-# take hours is gone, so 7 variables sequentially at ~5min each is ~35min
-# per scenario instead of the ~3-4h/variable this pipeline needed before.
+#   sbatch --export=ALL,SCENARIO=ssp119 run_scenario.sbatch
 #
-# usage: sbatch --export=ALL,SCENARIO=ssp119 jobs/run_scenario_all_vars.sbatch
-: "${SCENARIO:?Set SCENARIO, e.g. sbatch --export=ALL,SCENARIO=ssp119 jobs/run_scenario_all_vars.sbatch}"
+# --exclusive matters: two of these packed onto the same node contend for the
+# same local I/O and both slow down noticeably.
+: "${SCENARIO:?Set SCENARIO, e.g. sbatch --export=ALL,SCENARIO=ssp119 run_scenario.sbatch}"
 OUT_ROOT=/scratch/hpcl-cli185/zw5/future_clim
 OUTDIR=$OUT_ROOT/$SCENARIO
 mkdir -p "$OUTDIR"
@@ -36,10 +32,13 @@ mkdir -p "$OUTDIR"
 VARNAMES=(PRECTmms FSDS TBOT QBOT FLDS PSRF WIND)
 for VARNAME in "${VARNAMES[@]}"; do
     echo "=== [$SCENARIO/$VARNAME] starting $(date) ==="
-    $PY -u scripts/11_build_future_cpl_bypass_rowmajor.py --scenario "$SCENARIO" --var "$VARNAME" \
+    $PY -u build_cpl_bypass_tessfa2.py --scenario "$SCENARIO" --var "$VARNAME" \
         --out-dir "$OUTDIR"
     echo "=== [$SCENARIO/$VARNAME] done $(date) ==="
 done
 
+# The model reads zone_mappings.txt from the same directory as the forcing
+# files. This must be cpl_bypass_full/'s copy -- see the note in the python
+# script about the two different files with this name.
 cp -n /projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/cpl_bypass_full/zone_mappings.txt "$OUTDIR/zone_mappings.txt"
 echo "=== [$SCENARIO] ALL 7 VARIABLES DONE $(date) ==="
