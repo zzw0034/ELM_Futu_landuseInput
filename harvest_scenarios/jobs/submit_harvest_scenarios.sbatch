@@ -12,7 +12,7 @@
 #SBATCH -o /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/logs/%x_%A_%a.out
 #SBATCH -e /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs/logs/%x_%A_%a.err
 
-# Builds the 12 management-scenario landuse.timeseries files (RF/DF/RH x 4
+# Builds the 9 management-scenario landuse.timeseries files (RF/DF/RH x 4
 # SSPs) -- definitions locked 2026-08-19, see HARVEST_SCENARIOS.md.
 #
 # --array=0-3: one task per SSP (index into ALL_SSPS in the script). The

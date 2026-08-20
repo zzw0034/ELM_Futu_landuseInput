@@ -36,7 +36,8 @@ SSP landuse.timeseries 本身)对比,差值即该管理措施的碳汇潜力。
 ### 总体思路
 
 三个情景都是对现有 4 个 Default 文件的**后处理变换**,**不需要重跑 §13 Chen2022 谐调器**。
-RF/DF 只改 `PCT_NAT_PFT`,RH 只改 5 个 `HARVEST_*`。其余所有场
+RH 只改 5 个 `HARVEST_*`;RF 和 DF 都改 `PCT_NAT_PFT`,而且**都把 `HARVEST_*` 置零**
+(RF 是造林后不再采伐,DF 是森林已清空、没有可采的树)。其余所有场
 (`PCT_URBAN`/`PCT_CROP`/`PCT_NATVEG` 等)在本数据集里**本身就是时间不变的 2-D 场**,
 结构上就碰不到——所以城市和耕地是**自动被保护的**,不需要额外写排除逻辑。
 
@@ -258,7 +259,7 @@ Fortran 端**没有"间隔"这个可调参数**,间隔的概念只存在于本�
 
 ---
 
-## 2. 最终成品(计划中,尚未生成)
+## 2. 最终成品(已生成,见 §6)
 
 不在本文件夹内——沿用主项目的 `outputs/` 树:
 
@@ -411,7 +412,7 @@ build_harvest_scenarios.py SSP2_RCP45   # 同上,按名字
 | SSP1-1.9 | +613,912 | +505,316 | −108,596 |
 | SSP2-4.5 | +531,874 | **+184,404** | **−347,470** |
 | SSP3-7.0 | +929,437 | **+1,010,313** | **+80,876** |
-| SSP5-8.5 | +818,464 | +692,528 | −125,936 |
+| SSP5-8.5 | +775,043 | +692,528 | −82,515 |
 
   **跨情景差 5.5 倍**(184,404 → 1,010,313)。**SSP3-7.0 是唯一随时间增大的**——
   它的基线在毁林,差距越拉越开;其余三个基线自己在造林,差距缩小。
@@ -458,7 +459,7 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 
 ## 8. 相关文件
 
-- `scripts/build_harvest_scenarios.py` —— 构建脚本(经典 NetCDF 格式,12 文件)
+- `scripts/build_harvest_scenarios.py` —— 构建脚本(经典 NetCDF 格式,9 文件)
 - `jobs/submit_harvest_scenarios.sbatch` —— Slurm 提交脚本
 - `../FUTURE_LANDUSE_TIMESERIES.md` —— 上游的 4 个 SSP Default landuse.timeseries 怎么来的
 - `../HARMONIZATION_SEUS_PILOT.md` §13 —— Default 情景所用的 Chen2022 谐调框架(本流程**不**重跑它)
