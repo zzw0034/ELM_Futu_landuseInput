@@ -592,10 +592,21 @@ data/external/chen2022_1km/SSP4_RCP60/                              (1km 源)
 argparse 拒绝），以及 `submit_landuse_future.sbatch`、`submit_harmonize_regen.sbatch`
 两个循环。
 
-### 12.8 `.nc4-orig` 原件仍在盘上
+### 12.8 `.nc4-orig` 原件已删除（2026-08-21，用户确认后）
 
-四个 `<成品>.nc4-orig`（151–154 MB，共约 0.6 GB）**故意保留**，等确认后再删：
+转换期间四个 `<成品>.nc4-orig`（151–154 MB，共约 0.6 GB）一直留在盘上，等
+逐字节验证过、且用户明确确认之后才删。现已删除。
+
+`outputs/processed/` 现在只剩四个正式情景的成品，没有 `.classic-tmp`、没有
+`.nc4-orig`、没有 SSP4：
 
 ```
-outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc.nc4-orig
+landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc
+  四个均为 64-bit offset / time = UNLIMITED / 无 _FillValue / 2,335,161,556 B
 ```
+
+**删掉原件不等于丢了退路**：`.nc4-orig` 里没有任何一个比特是新文件里没有的
+（§12.7 的逐字节验证正是这个意思）。真要退回 NetCDF4 容器，
+`nccopy -k nc4 -d 4` 一条命令就能从现在的经典文件重新压出来。**唯一无法从盘上
+重建的是生成过程本身**，那由 §5 的管线和 Git 历史负责，不由这四个 152 MB 的
+副本负责。
