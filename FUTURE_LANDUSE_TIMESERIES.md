@@ -13,8 +13,11 @@
 
 ```
 outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc
-  <SSP> ∈ {SSP1_RCP19, SSP2_RCP45, SSP3_RCP70, SSP4_RCP60, SSP5_RCP85}   各 ~152 MB
+  <SSP> ∈ {SSP1_RCP19, SSP2_RCP45, SSP3_RCP70, SSP5_RCP85}   各 2,335,161,556 B（2.2 GB）
 ```
+
+容器已于 2026-08-21 从 NETCDF4+zlib 改为经典 `NETCDF3_64BIT_OFFSET`（见 §12），
+所以体积从 ~152 MB 变成 2.2 GB。同批产出的 `SSP4_RCP60` 成品**已删除**（§12.7）。
 
 时间 2024–2100(77 年),网格 324×504(lsmlat/lsmlon),变量名/维度/dtype/网格
 **与目标历史文件逐项一致**:
@@ -99,7 +102,7 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 | Chen 1km 源 | `data/external/chen2022_1km/<SSP>/global_PFT_*.tif` |
 | Chen → 目标网格 | `outputs/interim/chen_targetgrid_<SSP>_2015-2100_1_24deg.nc` |
 | LUH2 情景 harvest | `/projects/hpcl-cli185/proj-shared/zw5/luh/ssp{1rcp19,2rcp45,3rcp70,4rcp60,5rcp85}_transitions.nc`（文件名是 `ssp1rcp19` 式,不是 `ssp119` 式;映射见 `02` 的 `LUH_FILE`）|
-| **成品** | `outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc` |
+| **成品** | `outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc`（经典 NetCDF3，`<SSP>` 四个正式情景；§12）|
 | harvest 下采样参考实现 | `.../s4_LUToutput_pft/s4_2_donwscale_LUH2harvest.py`（面积守恒 36× 修复见其中）|
 
 ---
@@ -177,6 +180,9 @@ $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
   —— SSP3_RCP70 单情景版。**不要**把 SSP3_RCP70 加进上面两个循环脚本:那会重算并
   覆盖已验证的 4 套 interim/processed 文件。
 - `jobs/download_luh2_ssp370.sbatch` —— 取 LUH2 v2f ssp370 harvest(见 §9.4)。
+- 容器转换(§12):`scripts/to_classic_netcdf.py`(转)、
+  `scripts/check_classic_rebuild.py`(验,权威)、`jobs/submit_to_classic.sbatch`
+  (两阶段驱动)。第二意见用 `SEUS_halfdeg/qa/check_format_equivalence.py`。
 - 谐调诊断(读 interim diag npz,不是交付 .nc):
   - `scripts/analysis/03_harmonize_seus_diag.py` —— 单情景轨迹/残差/样点组成
     (`jobs/submit_diag.sbatch`, `jobs/submit_harmonize_regen.sbatch`)。
@@ -471,8 +477,9 @@ sbatch jobs/submit_harvest_tidx_check.sbatch    # 10 时间索引验证
 那 21 个 `_FillValue = NaN` 是 xarray 默认编码加的，不是科学量；历史文件一个
 都没有。除这三项外，变量集合、顺序、dtype、维度、其余属性、全部数值都不动。
 
-代价是体积：每情景 0.15 → 约 2.2 GB，四个共约 +8.7 GB（`/projects` 当时余
-39 TB）。压缩省的那点盘远不值得换一个格式陷阱。
+代价是体积：每情景 158 MB → **2,335,161,556 B（2.2 GB）**，四个净增约 8.7 GB
+（`/projects` 当时余 39 TB）。压缩省的那点盘远不值得换一个格式陷阱。四个文件
+字节数完全相同——结构一致且不再压缩，本来就该如此。
 
 ### 12.3 怎么做的 —— 只换容器，不重跑管线
 
@@ -538,3 +545,57 @@ ELM 读取，而改维度名比改容器格式风险大得多。
 NaN 计数，万一真有 NaN，也能看出第二意见的失败是假阳性而不是真问题。
 第二意见只做集合约束：FAIL 必须是那两个已知名字的子集。
 
+### 12.7 实际执行结果（Slurm job 468457）
+
+```
+job 468457  lu_to_classic   -p serial -q normal -A hpcl-cli185
+            -N 1 -n 1 -c 4 --mem=48g    COMPLETED 0:0，用时 00:06:15，stderr 空
+日志:outputs/logs/lu_to_classic_468457.out
+```
+
+**8 次验证全过**（phase A 四次原件 vs 临时件、phase B 四次 `.nc4-orig` vs 就位件）：
+
+| 项 | 结果 |
+|---|---|
+| 格式 | 四个都是 `64-bit offset`（`ncdump -k`） |
+| `time` | 四个都是 `UNLIMITED ; // (77 currently)` |
+| `_FillValue` | 四个都已无（`ncdump -h` 搜不到） |
+| 每个文件丢弃 `_FillValue` 的变量数 | **21**（26 个变量里的 21 个，与预期完全一致） |
+| 数值 | **26/26 变量逐字节相同**，八次全部如此 |
+| NaN 计数 | **每个变量都是 0** —— §6 "无 inf/nan" 得到独立确认 |
+| 第二意见唯一 FAIL | `variable attributes identical`，共 8 次，就是那 21 个 `_FillValue`；它的 `all 26 variables bitwise identical` 每次都 PASS |
+
+日志里全部 `FAIL` 字样只有这一处 × 8，没有别的。
+
+**SSP4_RCP60 已删除**：
+`outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_SSP4_RCP60_simyr2024-2100.nc`
+（158,582,605 B）。删前在本地整个 workspace 和 Pathfinder 项目树都 grep 过，
+**没有任何脚本、作业或文档引用这个成品**：`07_scenario_compare_final.py` 的
+`SCEN` 已是 SSP1/2/3/5，`harvest_scenarios/scripts/build_harvest_scenarios.py`
+早就把它显式排除（其第 72 行有注释说明）。
+
+**同名 SSP4 的其他产物保留，没有动**，它们属于 Chen-CONUS 分析链而不是交付链：
+
+```
+outputs/interim/chen_targetgrid_SSP4_RCP60_2015-2100_1_24deg.nc      12 MB
+outputs/interim/harmonize_seus_diag_SSP4_RCP60.npz                  115 MB
+outputs/figures/{area_timeseries,chen2022_landuse}_CONUS_SSP4_RCP60_*.png
+outputs/figures/fig_harmonize_seus_diag_SSP4_RCP60.png
+data/external/chen2022_1km/SSP4_RCP60/                              (1km 源)
+```
+
+对应地，`01_chen2022_to_elm_landuse.py`、`06_harmonize_seus_compare.py`、
+`20`–`23`、`30`–`33`、`src/elm_landuse/raster_io.py`、`submit_chen_targetgrid.sbatch`、
+`submit_landuse.sbatch` 里的 SSP4 也**都保留**——REFERENCE.md §10–12 的对照结论
+依赖它们。只有能重新生成"已删除的那个成品"的入口被摘掉了：
+`02_harmonize_seus.py` 的 `CHEN`/`LUH_FILE`（`--scenario SSP4_RCP60` 现在会被
+argparse 拒绝），以及 `submit_landuse_future.sbatch`、`submit_harmonize_regen.sbatch`
+两个循环。
+
+### 12.8 `.nc4-orig` 原件仍在盘上
+
+四个 `<成品>.nc4-orig`（151–154 MB，共约 0.6 GB）**故意保留**，等确认后再删：
+
+```
+outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc.nc4-orig
+```
