@@ -439,3 +439,102 @@ sbatch jobs/submit_harvest_tidx_check.sbatch    # 10 时间索引验证
 中间量 `outputs/interim/scenario_compare_final.npz`。
 
 ⚠️ 这五个 job 用的是 `-p serial -q normal`(公共分区),不是专属分区。
+
+---
+
+## 12. 容器格式转成经典 NetCDF3（记忆重点，2026-08-21）
+
+四个正式情景的 landuse.timeseries 从 **NETCDF4 + zlib level 4** 重写成
+**NETCDF3_64BIT_OFFSET**，与历史文件同容器。同批的 `SSP4_RCP60` 成品删除。
+
+### 12.1 为什么改 —— 不是修故障，是拆雷
+
+**当前配置下 NetCDF4 本来就读得了**，这点先说清楚，免得以后误以为修过一个 bug：
+
+- `e3sm.exe` 链接的是 netCDF-C 4.9.2（`libnetcdf.so.19`），`has-nc4=yes`；
+- lnd 用的是 `pio_typename = "netcdf"`（串行 netCDF-C 路径）。
+
+雷在于：`libpnetcdf.so.4` 同样被链接，模块栈里也有 `parallel-netcdf`，而
+**pnetcdf 读不了 NetCDF4**。4km 域 75,920 个陆地格，把 `PIO_TYPENAME` 换成
+`pnetcdf` 提 I/O 性能是迟早会做的动作，那一刻这些输入会直接失败，而且失败点
+离原因很远。经典格式在所有 `PIO_TYPENAME` 下都能读，所以对齐容器是把这个
+隐患提前拆掉。
+
+### 12.2 对齐了哪三项
+
+| | 转换前 | 转换后（= 历史文件） |
+|---|---|---|
+| 格式 | NETCDF4 + zlib 4 | `NETCDF3_64BIT_OFFSET` |
+| `time` | 固定长度 | **unlimited**（record 维） |
+| `_FillValue` | 21 个变量带 `NaN` | **无** |
+
+那 21 个 `_FillValue = NaN` 是 xarray 默认编码加的，不是科学量；历史文件一个
+都没有。除这三项外，变量集合、顺序、dtype、维度、其余属性、全部数值都不动。
+
+代价是体积：每情景 0.15 → 约 2.2 GB，四个共约 +8.7 GB（`/projects` 当时余
+39 TB）。压缩省的那点盘远不值得换一个格式陷阱。
+
+### 12.3 怎么做的 —— 只换容器，不重跑管线
+
+**没有**重跑 `jobs/submit_landuse_future*.sbatch`。这批文件下游已经用过、验过
+（§11），重跑存在产出数值不同的可能，那会让 §11 的所有结论失去对应物。
+
+也**没有**用 `nccopy`：`-k nc6 -u` 能改格式和 unlimited，但删不掉
+`_FillValue`，还要再套一次 `ncatted`，两步比一步难验证。改为单遍逐变量拷贝：
+
+- `scripts/to_classic_netcdf.py` —— 转换；
+- `scripts/check_classic_rebuild.py` —— 验证（权威）；
+- `jobs/submit_to_classic.sbatch` —— 两阶段驱动（`-p serial -q normal`）。
+
+两个实现细节值得记住，都不是可有可无的：
+
+1. **必须关掉 auto-masking**（`set_auto_maskandscale(False)`）。源文件
+   `_FillValue = NaN`，netCDF4-python 默认会把等于 fill 的值 mask 掉，写出时
+   masked 位置被填成目标类型的默认 fill（9.97e36）——正好在这次声称"一个数
+   都不动"的变量里静默改值。
+2. **按源 chunk 读**。`PCT_NAT_PFT` 的 HDF5 分块是 `[20, 4, 81, 126]`，逐条
+   时间读会让每个 chunk 被反复解压最多 80 次。实测 15 秒 vs 331 秒。
+
+流程是"先写临时文件 → 验 → 原件改名 `.nc4-orig` 保留 → 新件就位 → 再验一次"，
+四个文件全过 phase A 才进 phase B，任何一步不过就停。
+
+### 12.4 生成脚本已同步改（本次不用它重跑）
+
+`scripts/02_harmonize_seus.py` 的写出改为：
+
+```python
+enc = {v: {"_FillValue": None} for v in out_ds.variables}
+out_ds.to_netcdf(out, format="NETCDF3_64BIT", encoding=enc,
+                 unlimited_dims=["time"])
+```
+
+去掉 `zlib`（正是它把 xarray 逼进 NETCDF4）、显式指定 format、抑制
+`_FillValue`、`time` 设 unlimited。**只影响将来的重新生成**。
+
+⚠️ **format 字面量是 `"NETCDF3_64BIT"`，不是 `"NETCDF3_64BIT_OFFSET"`。**
+后者是 netCDF4-python 的拼法，xarray 不接受（`ValueError: unexpected
+format=...`），但写出来的文件读回去 `file_format` 报的正是
+`NETCDF3_64BIT_OFFSET`。两个名字指同一个格式，写的时候只有前者管用。
+本地 xarray 2026.7.0 与 Pathfinder `make_surfdata_pf` 的 2026.4.0 都是如此。
+
+### 12.5 保留的差异：`string256` vs `nchar`
+
+`input_pftdata_filename` 的字符维度，SSP 文件叫 `string256`（xarray 按串长自动
+命名），历史文件叫 `nchar`。**故意不改**：它不影响 pnetcdf 兼容性，也不影响
+ELM 读取，而改维度名比改容器格式风险大得多。
+
+### 12.6 验证怎么算过
+
+`SEUS_halfdeg/qa/check_format_equivalence.py` 是现成的第二意见，但它的退出码
+不能直接用，输出要读而不是信，有两个原因：
+
+1. 它把有意为之的 `_FillValue` 删除报成普通 FAIL —— 它没有"预期变更"的概念；
+2. 它的数值检查是 `np.array_equal`，只要数组里有一个 NaN 就返回 False，哪怕
+   两边逐位相同（NaN != NaN）。§6 记录这批文件无 NaN，所以这项预期会 PASS，
+   但不该拿它当依据。
+
+所以判定权交给 `scripts/check_classic_rebuild.py`：它逐字节比较（NaN 与自己
+的副本逐字节相等），并要求每一处结构差异只能是那两项之一；同时打印每个变量的
+NaN 计数，万一真有 NaN，也能看出第二意见的失败是假阳性而不是真问题。
+第二意见只做集合约束：FAIL 必须是那两个已知名字的子集。
+
