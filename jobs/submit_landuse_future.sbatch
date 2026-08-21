@@ -14,7 +14,11 @@ set -euo pipefail
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export PYTHONPATH="$PWD/src"
-for SC in SSP1_RCP19 SSP2_RCP45 SSP4_RCP60 SSP5_RCP85; do
+# SSP4_RCP60 was dropped from the scenario set on 2026-07-29 (no TESSFA
+# climate forcing exists to pair with it); SSP3_RCP70 replaced it and has
+# its own single-scenario script. Do NOT add SSP3_RCP70 to this loop -- it
+# would recompute and overwrite the already-verified products.
+for SC in SSP1_RCP19 SSP2_RCP45 SSP5_RCP85; do
   echo "==================== $SC ===================="
   $PY scripts/02_harmonize_seus.py --build-timeseries --scenario "$SC"
 done

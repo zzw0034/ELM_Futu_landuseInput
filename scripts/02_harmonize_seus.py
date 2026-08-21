@@ -28,12 +28,14 @@ NL = Path(
     "s4_LUToutput_pft/scr_out/elmpft_from_nlcd_frac_pred_1850-2023_1_24deg.nc"
 )
 OUTDIR = Path("/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/outputs")
-# Chen scenario -> processed file (the 4 available SSPs)
+# Chen scenario -> processed file. SSP4_RCP60 was built once and then dropped
+# from the scenario set on 2026-07-29: ScenarioMIP Tier 2, so no TESSFA climate
+# forcing exists to pair it with. SSP3_RCP70 replaced it. See
+# FUTURE_LANDUSE_TIMESERIES.md section 9.
 CHEN = {
     "SSP1_RCP19": "chen2022_landuse_CONUS_SSP1_RCP19_2015-2100_1_24deg.nc",
     "SSP2_RCP45": "chen2022_landuse_CONUS_SSP2_RCP45_2015-2100_1_24deg.nc",
     "SSP3_RCP70": "chen2022_landuse_CONUS_SSP3_RCP70_2015-2100_1_24deg.nc",
-    "SSP4_RCP60": "chen2022_landuse_CONUS_SSP4_RCP60_2015-2100_1_24deg.nc",
     "SSP5_RCP85": "chen2022_landuse_CONUS_SSP5_RCP85_2015-2100_1_24deg.nc",
 }
 SEUS = dict(lon0=-95.0, lon1=-74.0, lat0=24.0, lat1=37.5)
@@ -99,7 +101,6 @@ LUH_FILE = {
     "SSP1_RCP19": "ssp1rcp19_transitions.nc",
     "SSP2_RCP45": "ssp2rcp45_transitions.nc",
     "SSP3_RCP70": "ssp3rcp70_transitions.nc",
-    "SSP4_RCP60": "ssp4rcp60_transitions.nc",
     "SSP5_RCP85": "ssp5rcp85_transitions.nc",
 }
 HARVEST_VAR_MAP = {
@@ -539,12 +540,19 @@ def build_landuse_timeseries(args):
         / f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{args.scenario}_simyr2024-2100.nc"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    enc = {
-        v: {"zlib": True, "complevel": 4}
-        for v in out_ds.data_vars
-        if out_ds[v].dtype.kind in "fi"
-    }
-    out_ds.to_netcdf(out, encoding=enc)
+    # Match the historical landuse.timeseries container exactly: classic
+    # NETCDF3_64BIT_OFFSET, unlimited time, no _FillValue. zlib is dropped
+    # because asking for it forces xarray to NETCDF4, which pnetcdf cannot
+    # read -- and pnetcdf is the natural PIO_TYPENAME for the 4 km domain.
+    # _FillValue=None suppresses the NaN attribute xarray adds by default;
+    # the historical file carries none.
+    # xarray's format literal for 64-bit offset is "NETCDF3_64BIT"; it rejects
+    # netCDF4-python's spelling "NETCDF3_64BIT_OFFSET", which is what the file
+    # then reports back as its file_format.
+    enc = {v: {"_FillValue": None} for v in out_ds.variables}
+    out_ds.to_netcdf(
+        out, format="NETCDF3_64BIT", encoding=enc, unlimited_dims=["time"]
+    )
     print(
         f"[landuse.timeseries] wrote {out}  "
         f"({len(out_years)} yrs {int(out_years[0])}..{int(out_years[-1])})"
