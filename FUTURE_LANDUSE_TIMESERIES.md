@@ -122,12 +122,16 @@ $PY scripts/01_chen2022_to_elm_landuse.py --scenario SSP2_RCP45 --years 2015 \
     --out outputs/interim/chen_targetgrid_SSP2_RCP45_2015-2100_1_24deg.nc
 
 # 2) 建 landuse.timeseries（原 4 情景循环:jobs/submit_landuse_future.sbatch
-#                           仅 SSP3_RCP70:jobs/submit_landuse_future_ssp370.sbatch）
+#                           仅 SSP3_RCP70:jobs/submit_landuse_future_ssp370.sbatch
+#                           4 情景 job array:jobs/submit_landuse_future_array.sbatch）
 $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
 ```
 不带 `--build-timeseries` 的 `02` 是 standalone 诊断路径，输入缺失时会直接退出，不是维护中的 ELM 强迫入口。`jobs/submit_harmonize_seus.sbatch` / `submit_harmonize_regen.sbatch` 走的就是这条，不要当成生产链。
 
-（Slurm:`-p hpcl-cli185 -q hpcl-cli185 -A hpcl-cli185 --mem=64g`。）
+（Slurm:`-p serial -q normal -A hpcl-cli185 --mem=64g`；2026-08-28 起从 `hpcl-cli185` 专属分区改到公共 `serial` 池，见下方 §13。）
+
+**`jobs/submit_landuse_future_array.sbatch`**（2026-08-28 新增，`--array=0-3`，一个 SSP 一个 task）：
+`submit_landuse_future.sbatch`（循环 SSP1/2/5）和 `submit_landuse_future_ssp370.sbatch`（仅 SSP3）拆成两个脚本，原因只是 SSP3_RCP70 是 2026-07-29 后补的、当时要避免重算已验证过的 SSP1/2/5（见 §9）。这个"保护"理由在一次影响全部 4 个情景的管线级改动（例如 §13 的 harvest smoothing）下不成立——4 个 SSP 本来就都要重建。新的 array job 一次提交、4 个 task 各自独立/并行/互不牵连，是这类全量重建的推荐入口；旧的两个脚本仍保留，供未来单个/部分情景重跑使用，不是被这个新 job 淘汰。
 
 ---
 
@@ -610,3 +614,52 @@ landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_
 `nccopy -k nc4 -d 4` 一条命令就能从现在的经典文件重新压出来。**唯一无法从盘上
 重建的是生成过程本身**，那由 §5 的管线和 Git 历史负责，不由这四个 152 MB 的
 副本负责。
+
+---
+
+## 13. LUH2 harvest 预平滑（进行中，2026-08-28 起）
+
+把 `s4_2_donwscale_LUH2harvest.py` 2026-08 新加的 normalized-convolution
+Gaussian 平滑移植进 `downscale_harvest()`（阶段 B），在面积守恒下采样**之前**
+先平滑每个 0.25° LUH2 粗格 harvest 场。目标正是 §11.4 记录的"累计采伐图上的
+0.25° 方块"——那节的结论"这是 LUH2 的真实分辨率，不是 bug"依然成立，平滑不
+改变这个事实，只是让下采样的输出不再在每个粗格边界上有硬跳变。
+
+**改动范围**：只在 `_distribute_conservatively` 之前多一步平滑；下采样公式、
+LUT 单位换算、5 类 ≤1 的 cap、`natveg_static/natveg_annual` 那个已知偏移
+（§2 表格 harvest 权重行、原 §11.6）全部不变——现在守恒的对象是**平滑后**的
+粗格场，不是原始值。不需要 s4_2 自己 landuse.timeseries 补丁那套 CONUS→SEUS
+regrid + delta 技巧，因为 `downscale_harvest()` 本来就直接在 SEUS 目标网格上
+下采样。
+
+**新增/改动的代码**（详见对应 commit）：
+
+- `scripts/02_harmonize_seus.py`：新增 `_normalized_conv_smooth`、
+  `SMOOTH_HARVEST_BEFORE_DOWNSCALE=True`、`HARVEST_SMOOTH_SIGMA_CELLS=1.0`；
+  输出文件新增 `harvest_smoothing_note` 属性说明平滑方法与 sigma。
+- `harvest_scenarios/scripts/build_harvest_scenarios.py`：新增 `--only-rh`，
+  只重建 RH（= Default HARVEST_* × 0.5，是三个管理情景里唯一会随 Default
+  harvest 改变的），不会连带重跑 RF/DF（两者 HARVEST_* 恒为 0，与 harvest 场
+  本身无关）。
+- `jobs/submit_landuse_future_array.sbatch`：新增，`--array=0-3` 一次重建全部
+  4 个 SSP（取代原先"循环 3 个 + SSP3 单独一个"的拆分，见 §5 的说明——那个拆分
+  只是为了在 2026-07-29 补 SSP3 时不动已验证的另外 3 个，这次全部都要重建，
+  该理由不再成立）。
+- `jobs/submit_landuse_future.sbatch` / `submit_landuse_future_ssp370.sbatch`：
+  分区从专属的 `hpcl-cli185` 改成公共 `serial`/`normal`（两个都是单节点单任务，
+  按 AGENTS.md 的 partition/QoS 配对表不需要专属分区）。
+- `scripts/analysis/12_harvest_smooth_compare.py` + `jobs/submit_harvest_smooth_compare.sbatch`
+  （新增）：old-vs-new 对比诊断，Default 和 RH 都能用（`--old-dir`/`--new-dir`/
+  `--suffix`/`--label` 参数化），出 map 对比图（2024/2064/2100）和 domain-total
+  harvested-area 时间序列图。
+
+**流程**：4 个旧 Default 文件已归档到
+`outputs/processed/archive_pre_smoothHARV_20260828/`（mv，非拷贝，SHA256 已记录
+在会话记录里）；新文件用 `jobs/submit_landuse_future_array.sbatch` 重建到
+`outputs/processed/`；验证通过后再用 `--only-rh` 重建 4 个 RH 文件（旧 RH 先
+归档到 `outputs/processed/harvest_scenarios/archive_pre_smoothHARV_20260828/`）；
+RF/DF 不动。
+
+**状态（待补）**：array job 尚未提交/完成，本节会在验证结果出来后补上
+`08_harvest_block_diag.py`（方块 CV 前后对比）、面积守恒诊断、和 `12` 脚本的
+old-vs-new 汇总数字。
