@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -J lu_future
 #SBATCH -A hpcl-cli185
-#SBATCH -p hpcl-cli185
-#SBATCH -q hpcl-cli185
+#SBATCH -p serial
+#SBATCH -q normal
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 8
