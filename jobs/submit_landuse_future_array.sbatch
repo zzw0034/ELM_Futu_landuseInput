@@ -5,7 +5,7 @@
 #SBATCH -q normal
 #SBATCH -N 1
 #SBATCH -n 1
-#SBATCH -c 8
+#SBATCH -c 1
 #SBATCH --mem=64g
 #SBATCH -t 00:40:00
 #SBATCH --array=0-3
@@ -30,6 +30,13 @@
 # --array=0-3: one task per SSP, index into ALL_SSPS below.
 # --mem=64g / -t 00:40:00: unchanged from the two scripts this replaces
 # (each already-measured per-scenario run fits inside this budget).
+# -c 1 (changed from -c 8, 2026-08-28): 02_harmonize_seus.py's
+# --build-timeseries path is a single process with no multiprocessing/dask/
+# MPI, and the smoothing step it now calls (scipy.ndimage.gaussian_filter)
+# is single-threaded C code -- confirmed by the 492947 array run (all 4
+# tasks COMPLETED in ~1-1.3 min using only -c 8's first core). OPENBLAS/OMP
+# thread counts are pinned to 1 below so no numpy/scipy BLAS call opens
+# extra threads either; nothing in this job can use a second core.
 #
 # No `module load` here, deliberately -- same self-contained conda env
 # reasoning as every other jobs/*.sbatch in this project (see
@@ -39,6 +46,8 @@ set -euo pipefail
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 export PYTHONPATH="$PWD/src"
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
 
 ALL_SSPS=(SSP1_RCP19 SSP2_RCP45 SSP3_RCP70 SSP5_RCP85)
 SC="${ALL_SSPS[$SLURM_ARRAY_TASK_ID]}"
