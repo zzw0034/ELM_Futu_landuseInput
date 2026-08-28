@@ -435,23 +435,29 @@ for ssp in SSPS:
     # baseline -- that is what the paper has to interpret, and it differs a
     # lot between scenarios because the baselines drift in opposite
     # directions. Read from the shared RF file, which every SSP run uses.
-    shared_rf = os.path.join(OUT_DIR, "landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc")
-    if os.path.exists(shared_rf):
-        with nc4.Dataset(shared_rf) as ds:
-            rf_forest = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
-        default_forest_chk = group_sum(default_pft, TREE_PFT)
-        f2023 = float(group_sum(pft_2023, TREE_PFT).sum())
-        print(f"[RF] prescribed target {full_increment.sum():.1f} on a 2023 base of "
-              f"{f2023:.1f} -> plateau {f2023 + full_increment.sum():.1f} from {RAMP_END_YEAR}")
-        for y in (RAMP_END_YEAR, int(years[-1])):
-            i = int(np.where(years == y)[0][0])
-            rf_y = float(rf_forest[i].sum())
-            df_y = float(default_forest_chk[i].sum())
-            print(f"[RF] {y}: RF forest {rf_y:.1f} | {ssp} baseline {df_y:.1f} | "
-                  f"RF-baseline {rf_y - df_y:+.1f}")
-        del rf_forest, default_forest_chk
+    # Needs default_pft, which --only-rh deliberately does not load (RF/DF
+    # are untouched by that mode anyway, so this comparison has nothing new
+    # to report); skip it there rather than crashing on a None.
+    if ONLY_RH:
+        print("[RF] skipped -- --only-rh requested, RF/DF untouched (no baseline comparison to print)")
     else:
-        print(f"[RF] shared RF file not present yet; run the {ALL_SSPS[0]} task to build it")
+        shared_rf = os.path.join(OUT_DIR, "landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc")
+        if os.path.exists(shared_rf):
+            with nc4.Dataset(shared_rf) as ds:
+                rf_forest = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
+            default_forest_chk = group_sum(default_pft, TREE_PFT)
+            f2023 = float(group_sum(pft_2023, TREE_PFT).sum())
+            print(f"[RF] prescribed target {full_increment.sum():.1f} on a 2023 base of "
+                  f"{f2023:.1f} -> plateau {f2023 + full_increment.sum():.1f} from {RAMP_END_YEAR}")
+            for y in (RAMP_END_YEAR, int(years[-1])):
+                i = int(np.where(years == y)[0][0])
+                rf_y = float(rf_forest[i].sum())
+                df_y = float(default_forest_chk[i].sum())
+                print(f"[RF] {y}: RF forest {rf_y:.1f} | {ssp} baseline {df_y:.1f} | "
+                      f"RF-baseline {rf_y - df_y:+.1f}")
+            del rf_forest, default_forest_chk
+        else:
+            print(f"[RF] shared RF file not present yet; run the {ALL_SSPS[0]} task to build it")
 
     if out_df is not None:
         with nc4.Dataset(out_df) as ds:
