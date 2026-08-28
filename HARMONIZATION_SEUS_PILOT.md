@@ -293,13 +293,25 @@ scripts/02_harmonize_seus.py
 
   Stage A: §13 group-level min-footprint march + NLCD-frozen re-split
            (--build-timeseries: natveg=0 → PFT0=100; Crop group is [15], PFT 16 force-zeroed)
-  Stage B: LUH2 harvest downscale (timeseries mode only)
+  Stage B: LUH2 harvest downscale (timeseries mode only). Since 2026-08-28 the
+           coarse 0.25 deg LUH2 field is pre-smoothed (normalized-convolution
+           Gaussian, ported from s4_2_donwscale_LUH2harvest.py) before the
+           area-conserving downscale -- see FUTURE_LANDUSE_TIMESERIES.md §13
+           for the full rationale/validation; the formula/units here are
+           unchanged, only the coarse input to it is smoothed first.
   Stage C: assemble target-schema landuse.timeseries (timeseries mode only)
 
 jobs/submit_chen_targetgrid.sbatch         # 01 --like <target>, 4 SSPs
 jobs/submit_chen_targetgrid_ssp370.sbatch  # same, SSP3_RCP70 only
-jobs/submit_landuse_future.sbatch          # 02 --build-timeseries, 4 SSPs; --mem=64g
-jobs/submit_landuse_future_ssp370.sbatch   # same, SSP3_RCP70 only
+jobs/submit_landuse_future_array.sbatch    # 02 --build-timeseries, 4 SSPs as one
+                                            # --array=0-3 job; -p serial -q normal
+                                            # -c 1 --mem=64g -t 00:40:00 (2026-08-28,
+                                            # preferred entry point for rebuilding
+                                            # all 4 SSPs together, e.g. after a
+                                            # pipeline-wide change like Stage B above)
+jobs/submit_landuse_future.sbatch          # loops SSP1/2/5 only, single job; kept for
+                                            # single/partial reruns; -p serial -q normal
+jobs/submit_landuse_future_ssp370.sbatch   # same, SSP3_RCP70 only; -p serial -q normal
 jobs/submit_harmonize_seus.sbatch          # standalone 02; --mem=48g; not the forcing path
 jobs/submit_harmonize_regen.sbatch         # standalone 4 SSPs + analysis/03 + analysis/06
 ```

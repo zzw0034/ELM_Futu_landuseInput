@@ -39,4 +39,5 @@ separate climate-forcing check, not part of this land-use pipeline.
 |---|---|
 | `REFERENCE.md` | Chen2022 → ELM mapping, aggregation, NLCD vs Chen comparison (§10–12) |
 | `HARMONIZATION_SEUS_PILOT.md` | §13 method spec (formulas). Implemented; ELM forcing uses `--build-timeseries` |
-| `FUTURE_LANDUSE_TIMESERIES.md` | Build and verify the SEUS `landuse.timeseries` 2024–2100 product |
+| `FUTURE_LANDUSE_TIMESERIES.md` | Build and verify the SEUS `landuse.timeseries` 2024–2100 product; §13 records the 2026-08-28 LUH2 harvest pre-smoothing fix |
+| `harvest_scenarios/HARVEST_SCENARIOS.md` | RF/DF/RH management-scenario post-processing built from the Default product above; §10 records the 2026-08-28 RH rebuild after the harvest-smoothing fix |

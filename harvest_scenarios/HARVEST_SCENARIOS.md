@@ -9,6 +9,11 @@
 情景定义于 **2026-08-19** 锁定(见 §1),**9 个文件当天已全部产出并通过校验**(见 §7)。RF 当天经过一次重新设计
 (从"Default + 增量"改为情景无关的独立轨迹 + 禁伐)。见 §7 状态。
 
+> **2026-08-28 更新**:上游 4 个 SSP Default `landuse.timeseries` 的 harvest 下采样加了
+> LUH2 预平滑(见 `../FUTURE_LANDUSE_TIMESERIES.md` §13),4 个 RH 文件因此**已重建**
+> (RH = Default HARVEST_* × 0.5,是三个情景里唯一会跟着变的)。RF 和 4 个 DF **未重建**,
+> 因为二者的 `HARVEST_*` 恒为 0,与 harvest 场本身无关。详见 §10。
+
 > **本文档 2026-08-19 全面重写**,替换了 2026-08-18 那版基于
 > `PRESERVE`/`HALFHARVEST_SSP370`/`REFOREST1850` 的旧设计——三个情景的定义全部改变(§1 是当前唯一有效的定义)。
 > 旧设计**产出过 3 个有效文件,但已于 2026-08-19 删除**(与新设计无一对应,且无任何
@@ -501,6 +506,15 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 `../outputs/logs/harvest_scenarios_<jobid>_<task>.{out,err}`。
 只重跑某一个 SSP:`sbatch --array=2 jobs/submit_harvest_scenarios.sbatch`。
 
+**只重建 RH,不动 RF/DF**(2026-08-28 新增,见 §10 的场景):
+
+```bash
+ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/harvest_scenarios && sbatch jobs/submit_harvest_scenarios_only_rh.sbatch"
+```
+
+底层是 `build_harvest_scenarios.py --only-rh`,跳过 RF 的构建和每个 SSP 的 DF 构建
+(连读 `PCT_NAT_PFT` 那 ~1.7GB 数组都跳过,只有 DF 需要它),只算并写 RH。
+
 脚本自带验证输出,但独立复核更稳。跑完之后建议核对:
 
 - `PCT_NAT_PFT` 逐格点 sum-to-100(natveg>0 处)——RF/DF 都是"森林增加多少草地就减少多少"的
@@ -521,9 +535,59 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 
 ## 9. 相关文件
 
-- `scripts/build_harvest_scenarios.py` —— 构建脚本(经典 NetCDF 格式,9 文件)
-- `jobs/submit_harvest_scenarios.sbatch` —— Slurm 提交脚本
-- `../FUTURE_LANDUSE_TIMESERIES.md` —— 上游的 4 个 SSP Default landuse.timeseries 怎么来的
+- `scripts/build_harvest_scenarios.py` —— 构建脚本(经典 NetCDF 格式,9 文件;
+  `--only-rh` 见 §10,2026-08-28 新增)
+- `jobs/submit_harvest_scenarios.sbatch` —— Slurm 提交脚本(全量 9 文件)
+- `jobs/submit_harvest_scenarios_only_rh.sbatch` —— 只重建 4 个 RH(2026-08-28 新增)
+- `../scripts/analysis/12_harvest_smooth_compare.py` + `../jobs/submit_harvest_smooth_compare.sbatch`
+  —— RH 新旧对比图(`--suffix _RH --label RH`,2026-08-28 新增,见 §10)
+- `../FUTURE_LANDUSE_TIMESERIES.md` —— 上游的 4 个 SSP Default landuse.timeseries 怎么来的;
+  §13 是 2026-08-28 harvest 平滑改动的完整记录
 - `../HARMONIZATION_SEUS_PILOT.md` §13 —— Default 情景所用的 Chen2022 谐调框架(本流程**不**重跑它)
 - `../future_climate/README_cpl_bypass_future.md` §6.1 —— 同一类 NetCDF4 分块写入坑的更早案例
+
+---
+
+## 10. 2026-08-28 更新:Default harvest 平滑后重建 RH
+
+`../FUTURE_LANDUSE_TIMESERIES.md` §13 给 4 个 SSP Default `landuse.timeseries` 的
+LUH2 harvest 下采样加了预平滑(消除 0.25° 粗格边界的硬跳变),Default 的
+`HARVEST_*` 因此变了。RH 是 `Default HARVEST_* × 0.5`,是三个管理情景里**唯一**
+读取 Default harvest 值的,所以必须重建;RF 和 DF 的 `HARVEST_*` 都恒为 0(§1),
+与 Default 的 harvest 场无关,原样保留,**没有重跑**。
+
+**流程**:
+
+1. 旧的 4 个 RH 文件(2026-08-19 产出)mv 到
+   `outputs/processed/harvest_scenarios/archive_pre_smoothHARV_20260828/`,
+   未删除。RF、4 个 DF 原地不动。
+2. 加了 `build_harvest_scenarios.py --only-rh`(§8):跳过 RF 构建、跳过每个
+   SSP 的 DF 构建(连 DF 才需要的 `PCT_NAT_PFT` 全量读取都跳过),只算并写 RH。
+3. 用 `jobs/submit_harvest_scenarios_only_rh.sbatch`(`--array=0-3`,
+   `-p serial -q normal -c 1 --mem=48g`)重建 4 个 RH 文件。
+
+**踩过一次坑,已修**:`--only-rh` 第一版把 `default_pft` 设为 `None`(省掉 DF 不需要
+的 ~1.7GB 读取),但漏改了后面"RF vs baseline"那段诊断打印,它也读 `default_pft`
+——4 个 array task 全部在**RH 文件已经写完、通过 `clone_structure` 自带完整性校验
+之后**才崩溃(`TypeError: 'NoneType' object is not subscriptable`),所以那一批
+RH 文件本身不是坏文件,只是诊断打印崩了、退出码非 0。已在 `--only-rh` 分支下跳过
+那段打印(commit `07ef631`),重跑后 4 个 task 全部 `COMPLETED exit 0`。
+
+**校验结果**(job `493002`,4 个 array task 全 COMPLETED exit 0):
+
+| SSP | `HARVEST_VH1` 比值 | `HARVEST_SH1` 比值 |
+|---|---:|---:|
+| SSP1_RCP19 | 0.500000 | 0.500000 |
+| SSP2_RCP45 | 0.500000 | 0.500000 |
+| SSP3_RCP70 | 0.500000 | 0.500000 |
+| SSP5_RCP85 | 0.500000 | 0.500000 |
+
+(`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就是零,比值无定义,见 §8 的既有提醒。)
+
+RH 新旧对比图(`fig_harvest_smooth_old_vs_new_maps_<SSP>_RH.png` ×4 +
+`fig_harvest_smooth_old_vs_new_timeseries_RH.png`,在 `../outputs/figures/`)
+和 Default 那批(`../FUTURE_LANDUSE_TIMESERIES.md` §13.2)模式完全一致:老版本
+0.25° 方块消失,`new − old` 差值呈方块边界扩散的棋盘状,域总采伐量相对变化
+(−0.5%~−0.8%,2024-2100 累计)与 Default 逐 SSP 完全对应(因为 RH 就是
+Default×0.5)。
 - `../outputs/processed/harvest_scenarios/` —— 产出数据存放位置(不在本文件夹内,见 §2)
