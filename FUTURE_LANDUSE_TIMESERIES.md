@@ -617,7 +617,7 @@ landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_
 
 ---
 
-## 13. LUH2 harvest 预平滑（进行中，2026-08-28 起）
+## 13. LUH2 harvest 预平滑（完成，2026-08-28）
 
 把 `s4_2_donwscale_LUH2harvest.py` 2026-08 新加的 normalized-convolution
 Gaussian 平滑移植进 `downscale_harvest()`（阶段 B），在面积守恒下采样**之前**
@@ -653,13 +653,89 @@ regrid + delta 技巧，因为 `downscale_harvest()` 本来就直接在 SEUS 目
   `--suffix`/`--label` 参数化），出 map 对比图（2024/2064/2100）和 domain-total
   harvested-area 时间序列图。
 
-**流程**：4 个旧 Default 文件已归档到
-`outputs/processed/archive_pre_smoothHARV_20260828/`（mv，非拷贝，SHA256 已记录
-在会话记录里）；新文件用 `jobs/submit_landuse_future_array.sbatch` 重建到
-`outputs/processed/`；验证通过后再用 `--only-rh` 重建 4 个 RH 文件（旧 RH 先
-归档到 `outputs/processed/harvest_scenarios/archive_pre_smoothHARV_20260828/`）；
-RF/DF 不动。
+### 13.1 最终产出清单（供下游 0.5° 聚合流水线使用）
 
-**状态（待补）**：array job 尚未提交/完成，本节会在验证结果出来后补上
-`08_harvest_block_diag.py`（方块 CV 前后对比）、面积守恒诊断、和 `12` 脚本的
-old-vs-new 汇总数字。
+**内容变化的 8 个文件**——只有这些文件的 `HARVEST_*` 变了，需要下游 0.5° 聚合
+重新跑：
+
+```
+outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc
+outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_RH_simyr2024-2100.nc
+```
+
+全部 8 个都是 2.2 GB、经典 `NETCDF3_64BIT_OFFSET`、`time` unlimited、无
+`_FillValue`，schema 与之前完全一致，Slurm job `492947`（Default）/`493002`
+（RH）2026-08-28 生成。
+
+**未变化、不需要重跑 0.5° 聚合的文件**（`HARVEST_*` 恒为 0，与本次改动无关）：
+
+```
+outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc
+outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_DF_simyr2024-2100.nc
+```
+
+历史段 `.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc`
+也未动——本次只改了 future（2024-2100）harvest 下采样。
+
+**旧版本（平滑前）已归档，未删除**：
+
+```
+outputs/processed/archive_pre_smoothHARV_20260828/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc
+outputs/processed/harvest_scenarios/archive_pre_smoothHARV_20260828/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_RH_simyr2024-2100.nc
+```
+
+SHA256（Default，mv 前）：
+
+| SSP | SHA256 |
+|---|---|
+| SSP1_RCP19 | `89102a9e67f99122969198bfb784bf62bccdbf5ea9a5e35fb8fd9f3788ca7644` |
+| SSP2_RCP45 | `4d61fd46484f99064fe5cfba45a07678ee3822846065e84d2bf21dbaace80572` |
+| SSP3_RCP70 | `f9ca4a31112cb7d6e16d39327b2f9f6f79a61274ae22e576724ae68df4da5d2b` |
+| SSP5_RCP85 | `b26cdb4d518778a0e489aac110f658f029ff73d54b1d32f3ad5054db036495aa` |
+
+SHA256（RH，mv 前）：
+
+| SSP | SHA256 |
+|---|---|
+| SSP1_RCP19_RH | `f2916757cb6806295a79588a52ea83036a75f79f3b823cd7bb8f1dc0b2d03779` |
+| SSP2_RCP45_RH | `7d3c4a378f516fa03367ccda1f8e59a45bc94a0a02db2fa1948093e5cfe94962` |
+| SSP3_RCP70_RH | `050ae74dba305016f4747c6bedb35d928c355b4a7a3a7ccbec42cb7c124ed930` |
+| SSP5_RCP85_RH | `043569015748d0eef0d4b16a9f3f4432385d6789f0474d087ff8714e9f9dd9e3` |
+
+### 13.2 校验结果（全部通过）
+
+Default（job `492947`，4 个 array task 全 COMPLETED exit 0）：
+
+| SSP | harvest 面积守恒 | sum-to-100 max\|diff\| | grid 对齐 | 域总采伐量变化(2024-2100累计) |
+|---|---|---|---|---|
+| SSP1_RCP19 | 1.0000 | 0.0000 | True | 783,725→779,107 km²（−0.589%） |
+| SSP2_RCP45 | 1.0000 | 0.0000 | True | 1,111,609→1,104,906 km²（−0.603%） |
+| SSP3_RCP70 | 1.0000 | 0.0000 | True | 897,883→890,851 km²（−0.783%） |
+| SSP5_RCP85 | 1.0000 | 0.0000 | True | 1,050,348→1,045,089 km²（−0.501%） |
+
+RH（job `493002`，重跑后 4 个 array task 全 COMPLETED exit 0；首次提交 `492965`
+因 `--only-rh` 的一处诊断打印用了未加载的 `default_pft` 崩溃——RH 文件本身在崩溃前
+已写完并通过 `clone_structure` 自带完整性校验，不是坏文件，代码已修复见下方
+commit）：`HARVEST_VH1`/`HARVEST_SH1` 的 new/old 比值 4 个 SSP 全部精确
+`0.500000`；域总采伐量相对变化与 Default 逐 SSP 完全一致（同一个 rel_diff，
+因为 RH 只是 Default×0.5）。
+
+可视化：`scripts/analysis/12_harvest_smooth_compare.py` 出的 map 对比图
+（2024/2064/2100，`PowerNorm`/`SymLogNorm` 配色）清楚显示 old 版本的 0.25° 方块
+在 new 版本里消失，`new−old` 差值呈方块边界扩散的棋盘状模式（边界内减、边界外
+增），是平滑的预期效果而非误差。9 张图（Default 5 张 + RH 5 张，各含 4 张 map +
+1 张时间序列）存在 `outputs/figures/fig_harvest_smooth_old_vs_new_maps_<SSP>[_RH].png`
+和 `..._timeseries[_RH].png`。
+
+### 13.3 涉及的 commit（`ELM_Futu_landuseInput`，均已推送 `origin/main`）
+
+`dcda88d` 加平滑 → `e1fb404`/`9be9263` 调整 Slurm 分区/核数 → `b194690` 加
+job array + 本节文档 → `f8a58dc` 改进对比图配色 → `07ef631` 修 `--only-rh`
+崩溃。最终 HEAD：`07ef631`。
+
+### 13.4 下一步：0.5° 聚合（未做，留给另一次会话）
+
+按 §3 的原则："先在 4km 上做完，再走 Default 已定的那套 0.5° 聚合流水线，不要
+在 0.5° 网格上独立重算"——本节 13.1 列出的 8 个文件就是那条流水线需要重新处理
+的输入；RF、4 个 DF、历史段不需要重跑（内容未变）。0.5° 聚合流水线本身在
+`SEUS_halfdeg` 项目里，不在本仓库。
