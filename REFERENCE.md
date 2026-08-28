@@ -51,8 +51,10 @@ jobs/
   submit_landuse.sbatch              Chen → CONUS 1/24° (comparison product)
   submit_chen_targetgrid.sbatch      Chen → target SEUS grid (4 SSPs)
   submit_chen_targetgrid_ssp370.sbatch  same, SSP3_RCP70 only
-  submit_landuse_future.sbatch       02 --build-timeseries (4 SSPs)
-  submit_landuse_future_ssp370.sbatch   same, SSP3_RCP70 only
+  submit_landuse_future_array.sbatch 02 --build-timeseries (4 SSPs as an array;
+                                      preferred for current full rebuilds)
+  submit_landuse_future.sbatch       02 --build-timeseries (SSP1/2/5 legacy partial rerun)
+  submit_landuse_future_ssp370.sbatch   same, SSP3_RCP70 only legacy partial rerun
   submit_*.sbatch                    matching analysis/figure drivers
 
 outputs/
@@ -217,13 +219,14 @@ $PY scripts/01_chen2022_to_elm_landuse.py \
   --out outputs/processed/chen2022_landuse_CONUS_SSP2_RCP45_2015-2100_1_24deg.nc
 
 # ELM forcing: Chen on the target landuse.timeseries grid, then harmonize
-TGT=/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc
+TGT=/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc
 $PY scripts/01_chen2022_to_elm_landuse.py \
   --scenario SSP2_RCP45 --years 2015 \
   --extra-years 2020:2100:5 \
   --like "$TGT" \
   --out outputs/interim/chen_targetgrid_SSP2_RCP45_2015-2100_1_24deg.nc
-$PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
+$PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45 \
+  --anchor-file "$TGT"
 ```
 
 Quick-look QA figures — maps of one time slice, and total area per column vs year:
@@ -243,11 +246,21 @@ SLURM batch jobs:
 ```bash
 sbatch jobs/submit_landuse.sbatch              # Chen CONUS comparison files
 sbatch jobs/submit_chen_targetgrid.sbatch      # Chen → target grid (4 SSPs)
-sbatch jobs/submit_landuse_future.sbatch       # 02 --build-timeseries (4 SSPs)
+sbatch jobs/submit_landuse_future_array.sbatch # 02 --build-timeseries (4 SSPs, current full rebuild)
 squeue -u $USER
 ```
 
 Edit the CONFIG block of `submit_landuse.sbatch` (`REGION_TAG`, `RES_TAG`, `SCENARIO`, `EXTRA_YEARS`, `YEARS_TAG`) before submitting a Chen CONUS run. The `*_TAG` values only build the output filenames and are not validated — keep them in sync with the values they describe. For the ELM forcing jobs, scenarios are listed in the sbatch loop; do not add SSP3_RCP70 to the 4-SSP loops (that would overwrite already-verified files — use the `*_ssp370.sbatch` scripts).
+
+Current full ELM-forcing rebuilds use `submit_landuse_future_array.sbatch`
+instead of the older split pair. The split pair remains useful for targeted
+partial reruns, but the array is the accurate entry point when all four SSP
+Default files must be regenerated together, for example after the 2026-08-28
+smoothHARV harvest update. The current historical reference lineage is the
+smoothHARV historical file
+`landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc`;
+it has the same static/`PCT_NAT_PFT` anchor fields as c260723 and smoothed
+historical `HARVEST_*`.
 
 The job calls the env's python by absolute path, so no conda state has to be set up or torn down around `sbatch`, and all paths in it are absolute, so it can be submitted from any directory.
 

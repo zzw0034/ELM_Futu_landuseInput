@@ -6,13 +6,18 @@
 **RF 与情景无关,只有 1 个文件、四个 SSP 共用;DF 和 RH 各 SSP 一份。
 合计 1 + 4×2 = 9 个文件。**
 
-情景定义于 **2026-08-19** 锁定(见 §1),**9 个文件当天已全部产出并通过校验**(见 §7)。RF 当天经过一次重新设计
-(从"Default + 增量"改为情景无关的独立轨迹 + 禁伐)。见 §7 状态。
+情景定义于 **2026-08-19** 锁定(见 §1),**9 个文件当天首次全部产出并通过校验**
+(见 §7)。RF 当天经过一次重新设计(从"Default + 增量"改为情景无关的独立轨迹 + 禁伐)。
+当前 production lineage 在 2026-08-28 smoothHARV 更新后继续沿用同一组定义:RH 已按新版
+Default harvest 重建,RF 作为 smoothHARV historical anchor 的 current provenance 版本重建/使用,
+DF 数值不受 harvest-only smoothing 影响。见 §10。
 
 > **2026-08-28 更新**:上游 4 个 SSP Default `landuse.timeseries` 的 harvest 下采样加了
 > LUH2 预平滑(见 `../FUTURE_LANDUSE_TIMESERIES.md` §13),4 个 RH 文件因此**已重建**
-> (RH = Default HARVEST_* × 0.5,是三个情景里唯一会跟着变的)。RF 和 4 个 DF **未重建**,
-> 因为二者的 `HARVEST_*` 恒为 0,与 harvest 场本身无关。详见 §10。
+> (RH = Default HARVEST_* × 0.5,是三个情景里唯一会跟着 harvest 数值变的)。
+> 之后历史期正式 reference 也切到 smoothHARV 文件；RF 需要作为 current provenance
+> 版本重建/使用,但这是历史 lineage 更新,不是因为 RF 的 `HARVEST_*` 会随 LUH2 harvest
+> 变化(RF 仍为 0)。DF 数值不受 harvest-only smoothing 影响。详见 §10。
 
 > **本文档 2026-08-19 全面重写**,替换了 2026-08-18 那版基于
 > `PRESERVE`/`HALFHARVEST_SSP370`/`REFOREST1850` 的旧设计——三个情景的定义全部改变(§1 是当前唯一有效的定义)。
@@ -506,7 +511,7 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 `../outputs/logs/harvest_scenarios_<jobid>_<task>.{out,err}`。
 只重跑某一个 SSP:`sbatch --array=2 jobs/submit_harvest_scenarios.sbatch`。
 
-**只重建 RH,不动 RF/DF**(2026-08-28 新增,见 §10 的场景):
+**只重建 RH,不动 RF/DF**(2026-08-28 新增,用于 Default harvest-only smoothing 后):
 
 ```bash
 ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/harvest_scenarios && sbatch jobs/submit_harvest_scenarios_only_rh.sbatch"
@@ -525,7 +530,7 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
   5 个 `HARVEST_*` 应恒为 0;`PCT_NAT_PFT` 最小值应 ≥ 0。
   **按构造不存在 clip**,所以平台值必须精确命中,不接受"略低"。
 - **DF**:全部 77 年的 tree PFT(natpft 1-8)应恒为 0;5 个 `HARVEST_*` 应恒为 0。
-- **RH**:5 个 `HARVEST_*` 对全部 77 年求和后,新/旧比值应精确为 **0.5**。
+- **RH**:5 个 `HARVEST_*` 对全部 77 年求和后,RH / 对应 Default 的比值应精确为 **0.5**。
   **注意不要按单一年份切片算比值**——`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就接近全零
   (见 `../FUTURE_LANDUSE_TIMESERIES.md` §11.3),单年切片可能除以零得到 `nan`,不代表数据错。
 - 全部 9 个文件都要确认**能被完整读回**(不只是写完没报错)——这正是 §5 那次的教训,
@@ -548,19 +553,27 @@ ssh pathfinder "cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/h
 
 ---
 
-## 10. 2026-08-28 更新:Default harvest 平滑后重建 RH
+## 10. 2026-08-28 更新:Default harvest 平滑后重建 RH；smoothHARV 历史 lineage 下使用 RF
 
 `../FUTURE_LANDUSE_TIMESERIES.md` §13 给 4 个 SSP Default `landuse.timeseries` 的
 LUH2 harvest 下采样加了预平滑(消除 0.25° 粗格边界的硬跳变),Default 的
 `HARVEST_*` 因此变了。RH 是 `Default HARVEST_* × 0.5`,是三个管理情景里**唯一**
 读取 Default harvest 值的,所以必须重建;RF 和 DF 的 `HARVEST_*` 都恒为 0(§1),
-与 Default 的 harvest 场无关,原样保留,**没有重跑**。
+与 Default 的 harvest 场无关,不会因为 harvest-only smoothing 产生数值变化。
+
+随后历史期正式文件切到
+`landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc`
+(见 `ELM_makeSurfdata/Make_surface_data/surfdata_results/README_smoothHARV_patch.md`)。
+这个历史 smoothHARV 文件只改历史 `HARVEST_*`,不改 RF 用来生成恢复轨迹的
+1850/2023 `PCT_NAT_PFT` 和静态 land-unit 场；因此 RF 的科学场应保持不变。但为了让
+下游 current 输入的 provenance 一致,RF 应作为 smoothHARV historical lineage 的当前版本
+重建/使用。DF 同理数值不变；是否重建 DF 只是 provenance 选择,不是 harvest 平滑的必需项。
 
 **流程**:
 
 1. 旧的 4 个 RH 文件(2026-08-19 产出)mv 到
    `outputs/processed/harvest_scenarios/archive_pre_smoothHARV_20260828/`,
-   未删除。RF、4 个 DF 原地不动。
+   未删除。RF、4 个 DF 在这一步原地不动。
 2. 加了 `build_harvest_scenarios.py --only-rh`(§8):跳过 RF 构建、跳过每个
    SSP 的 DF 构建(连 DF 才需要的 `PCT_NAT_PFT` 全量读取都跳过),只算并写 RH。
 3. 用 `jobs/submit_harvest_scenarios_only_rh.sbatch`(`--array=0-3`,
@@ -573,7 +586,7 @@ LUH2 harvest 下采样加了预平滑(消除 0.25° 粗格边界的硬跳变),De
 RH 文件本身不是坏文件,只是诊断打印崩了、退出码非 0。已在 `--only-rh` 分支下跳过
 那段打印(commit `07ef631`),重跑后 4 个 task 全部 `COMPLETED exit 0`。
 
-**校验结果**(job `493002`,4 个 array task 全 COMPLETED exit 0):
+**RH 校验结果**(job `493002`,4 个 array task 全 COMPLETED exit 0):
 
 | SSP | `HARVEST_VH1` 比值 | `HARVEST_SH1` 比值 |
 |---|---:|---:|
@@ -582,7 +595,8 @@ RH 文件本身不是坏文件,只是诊断打印崩了、退出码非 0。已�
 | SSP3_RCP70 | 0.500000 | 0.500000 |
 | SSP5_RCP85 | 0.500000 | 0.500000 |
 
-(`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就是零,比值无定义,见 §8 的既有提醒。)
+这里的 0.500000 是 **new RH / new Default** 的定义校验,不是 old RH / new RH。
+`HARVEST_VH2`/`SH2`/`SH3` 在 SEUS 域内本来就是零,比值无定义,见 §8 的既有提醒。
 
 RH 新旧对比图(`fig_harvest_smooth_old_vs_new_maps_<SSP>_RH.png` ×4 +
 `fig_harvest_smooth_old_vs_new_timeseries_RH.png`,在 `../outputs/figures/`)

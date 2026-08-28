@@ -19,11 +19,18 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 容器已于 2026-08-21 从 NETCDF4+zlib 改为经典 `NETCDF3_64BIT_OFFSET`（见 §12），
 所以体积从 ~152 MB 变成 2.2 GB。同批产出的 `SSP4_RCP60` 成品**已删除**（§12.7）。
 
+这些 future 文件已按 2026-08-28 smoothHARV 流程重建:`HARVEST_*` 的 LUH2
+0.25° 源场先 normalized-convolution Gaussian 平滑,再下采样到 1/24°。当前
+配套历史文件是
+`landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc`
+(见 `ELM_makeSurfdata/Make_surface_data/surfdata_results/README_smoothHARV_patch.md`);
+它只改历史 `HARVEST_*`,静态变量和 2023 `PCT_NAT_PFT` anchor 与原 c260723 一致。
+
 时间 2024–2100(77 年),网格 324×504(lsmlat/lsmlon),变量名/维度/dtype/网格
 **与目标历史文件逐项一致**:
 
 ```
-目标:landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc
+目标:landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc
       (/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/surfdata_results/)
 ```
 
@@ -33,7 +40,7 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 
 | 角色 | 来源 | 提供 |
 |---|---|---|
-| 历史状态(锚) | 目标 landuse.timeseries c260723 | 静态 `PCT_NATVEG` + `PCT_NAT_PFT(2023)` + 所有静态 land-unit 变量 |
+| 历史状态(锚) | 目标 landuse.timeseries smoothHARV c260723 | 静态 `PCT_NATVEG` + `PCT_NAT_PFT(2023)` + 所有静态 land-unit 变量；与原 c260723 相同,但历史 `HARVEST_*` 已平滑 |
 | 未来趋势 | Chen2022 SSP(1km → 目标网格) | `PCT_NAT_PFT` 的逐年组成变化 |
 | 未来采伐 | LUH2 v2f 情景 transitions(`/luh/ssp*_transitions.nc`) | `HARVEST_×5` + `GRAZING` |
 
@@ -77,8 +84,10 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 
 **阶段 B —— harvest 下采样（复用 s4_2 方法)**
 - 读 `/luh/ssp{X}_transitions.nc`(0.25°,720×1440,lat 降序)。
-- 权重 `w = tree_share(逐年 harmonized) × natveg(静态)`。
-- 面积守恒下采样 `frac_i = F·w_i·ΣA/Σ(wA)`(逐字复用 s4_2 的
+- 对每年、每个 LUH2 harvest 变量先做 normalized-convolution Gaussian 平滑
+  (`sigma=1.0` 个 0.25° 粗格;NaN/ocean 用 valid mask 排除,不当作 0 参与平均)。
+- 权重 `w = tree_share(逐年 harmonized) × natveg(逐年 harmonized)`。
+- 面积守恒下采样 `frac_i = F_smooth·w_i·ΣA/Σ(wA)`(复用 s4_2 的
   `_build_hr_to_coarse_index` / `_distribute_conservatively`)。
 - 转 LUT 单位 `÷veg_frac`,5 类和裁 ≤1。
 - 时间 **k=−1**:输出标签年 Y → LUH2 日历 Y−1 → SSP index `(Y−1)−2015`。
@@ -98,7 +107,7 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 
 | 内容 | 路径 |
 |---|---|
-| 目标(锚+网格+静态变量) | `.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc` |
+| 目标(锚+网格+静态变量) | `.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc` |
 | Chen 1km 源 | `data/external/chen2022_1km/<SSP>/global_PFT_*.tif` |
 | Chen → 目标网格 | `outputs/interim/chen_targetgrid_<SSP>_2015-2100_1_24deg.nc` |
 | LUH2 情景 harvest | `/projects/hpcl-cli185/proj-shared/zw5/luh/ssp{1rcp19,2rcp45,3rcp70,4rcp60,5rcp85}_transitions.nc`（文件名是 `ssp1rcp19` 式,不是 `ssp119` 式;映射见 `02` 的 `LUH_FILE`）|
@@ -113,7 +122,7 @@ outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.
 PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 cd /projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput
 export PYTHONPATH=$PWD/src
-TGT=.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc
+TGT=.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc
 
 # 1) Chen -> 目标网格（原 4 情景循环:jobs/submit_chen_targetgrid.sbatch
 #                      仅 SSP3_RCP70:jobs/submit_chen_targetgrid_ssp370.sbatch）
@@ -121,25 +130,27 @@ $PY scripts/01_chen2022_to_elm_landuse.py --scenario SSP2_RCP45 --years 2015 \
     --extra-years 2020:2100:5 --like "$TGT" \
     --out outputs/interim/chen_targetgrid_SSP2_RCP45_2015-2100_1_24deg.nc
 
-# 2) 建 landuse.timeseries（原 4 情景循环:jobs/submit_landuse_future.sbatch
-#                           仅 SSP3_RCP70:jobs/submit_landuse_future_ssp370.sbatch
-#                           4 情景 job array:jobs/submit_landuse_future_array.sbatch）
-$PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
+# 2) 建 landuse.timeseries（当前全量入口:jobs/submit_landuse_future_array.sbatch；
+#                           原 SSP1/2/5 循环和 SSP3 单独脚本只作 partial rerun）
+$PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45 \
+    --anchor-file "$TGT"
 ```
 不带 `--build-timeseries` 的 `02` 是 standalone 诊断路径，输入缺失时会直接退出，不是维护中的 ELM 强迫入口。`jobs/submit_harmonize_seus.sbatch` / `submit_harmonize_regen.sbatch` 走的就是这条，不要当成生产链。
 
-（Slurm:`-p serial -q normal -A hpcl-cli185 --mem=64g`；2026-08-28 起从 `hpcl-cli185` 专属分区改到公共 `serial` 池，见下方 §13。）
+（Slurm:`-p serial -q normal -A hpcl-cli185 -c 1 --mem=64g`；2026-08-28 起从
+`hpcl-cli185` 专属分区改到公共 `serial` 池，见下方 §13。）
 
 **`jobs/submit_landuse_future_array.sbatch`**（2026-08-28 新增，`--array=0-3`，一个 SSP 一个 task）：
 `submit_landuse_future.sbatch`（循环 SSP1/2/5）和 `submit_landuse_future_ssp370.sbatch`（仅 SSP3）拆成两个脚本，原因只是 SSP3_RCP70 是 2026-07-29 后补的、当时要避免重算已验证过的 SSP1/2/5（见 §9）。这个"保护"理由在一次影响全部 4 个情景的管线级改动（例如 §13 的 harvest smoothing）下不成立——4 个 SSP 本来就都要重建。新的 array job 一次提交、4 个 task 各自独立/并行/互不牵连，是这类全量重建的推荐入口；旧的两个脚本仍保留，供未来单个/部分情景重跑使用，不是被这个新 job 淘汰。
 
 ---
 
-## 6. 验证结果（5 情景全过）
+## 6. 验证结果（当前 4 个正式情景全过）
 
-下表前 4 情景为 2026-07-24 那批;SSP3_RCP70(2026-07-29 补跑)前四项同样是
-1.0000 / 0.0000 / 0.0000 / True,24 变量、324×504 网格、77 年 2024–2100、
-152 MB 均与其余四套一致。
+当前正式成品是 2026-08-28 smoothHARV 重建后的 4 个 SSP。旧的 2026-07/08
+未平滑 Default 文件已移到 `outputs/processed/archive_pre_smoothHARV_20260828/`。
+四个新文件均为 24 变量、324×504 网格、77 年 2024–2100、经典
+`NETCDF3_64BIT_OFFSET`、约 2.2 GB。
 
 
 | 检查 | 结果 |
@@ -150,7 +161,7 @@ $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
 | 网格 LATIXY/LONGXY/dims vs 目标 | **一致(True)** |
 | 变量名/维度/dtype vs 目标 | **NONE mismatch**(24 变量全对应) |
 | 静态变量 vs 目标 | **逐字节相等** |
-| harvest 量级(我 2024 vs 目标 2023) | SH1 sum 661 vs 691(~4%)、VH1 39 vs 48(~19%),连续 |
+| harvest 量级 | 见 §13.2；smoothHARV 后 2024–2100 域总采伐量比旧版低约 0.5–0.8%,空间硬方块消失 |
 | inf/nan | 无 |
 
 ---
@@ -179,10 +190,11 @@ $PY scripts/02_harmonize_seus.py --build-timeseries --scenario SSP2_RCP45
 - `scripts/02_harmonize_seus.py` —— 主脚本(标准 CONUS 谐调 + `--build-timeseries` 模式)。
 - `scripts/01_chen2022_to_elm_landuse.py` —— Chen→ELM,`--like` 支持 ELM 格式。
 - `scripts/analysis/` —— 全部诊断/画图/一次性检查脚本。
-- `jobs/submit_chen_targetgrid.sbatch`、`jobs/submit_landuse_future.sbatch`（原 4 情景循环）。
+- `jobs/submit_chen_targetgrid.sbatch`、`jobs/submit_landuse_future_array.sbatch`
+  （当前 4 情景 full rebuild 入口）。
 - `jobs/submit_chen_targetgrid_ssp370.sbatch`、`jobs/submit_landuse_future_ssp370.sbatch`
-  —— SSP3_RCP70 单情景版。**不要**把 SSP3_RCP70 加进上面两个循环脚本:那会重算并
-  覆盖已验证的 4 套 interim/processed 文件。
+  —— SSP3_RCP70 单情景版；`jobs/submit_landuse_future.sbatch` 仍保留为 SSP1/2/5
+  partial rerun 入口。不要把 SSP3_RCP70 加进旧循环脚本；全量重建用 array job。
 - `jobs/download_luh2_ssp370.sbatch` —— 取 LUH2 v2f ssp370 harvest(见 §9.4)。
 - 容器转换(§12):`scripts/to_classic_netcdf.py`(转)、
   `scripts/check_classic_rebuild.py`(验,权威)、`jobs/submit_to_classic.sbatch`
@@ -361,30 +373,34 @@ Chen 趋势从 2024 起就在作用。做基准年比较时不要拿 2024 当共
 
 ### 11.3 采伐:几乎全是 SH1
 
-累计 2024–2100:SSP2 **111.2** > SSP5 105.0 > SSP3 89.8 > SSP1 78.4 Mha。
+累计 2024–2100(smoothHARV 后,按 ELM 静态 natveg 口径):SSP2 **110.5** >
+SSP5 104.5 > SSP3 89.1 > SSP1 77.9 Mha。
 
 五类里 **SH1(次生成熟林)占几乎 100%**,VH1 仅 0.14–0.16 Mha,**VH2/SH2/SH3 恰好
 为零**。根因在 LUH2 的状态场:SEUS 的 `primf ≈ 0`(历史上早被砍光),只有 `secdf`。
 所以"只有 SH1 有值"是源头的物理事实,不是我们丢了东西。
 
-### 11.4 累计采伐图上的 0.25° 方块 = LUH2 的分辨率,不是 bug
+### 11.4 累计采伐图上的 0.25° 方块:旧版诊断与当前 smoothHARV 修复
 
 下采样公式(`_distribute_conservatively`):
 
 ```
-frac_i = F_c × w_i × Σ_c(area) / Σ_c(w·area)        w = tree_share × natveg
+frac_i = F_c × w_i × Σ_c(area) / Σ_c(w·area)        w = tree_share × natveg_annual
          └─┬─┘   └────────────┬────────────┘
       LUH2 定总量          我们的森林图定位置(块内均值为 1,面积守恒)
 ```
 
-`F_c` = **LUH2 文件里该 0.25° 格当年的原始值**(`luh[var].isel(time=hidx)`,
-见 `02_harmonize_seus.py` 的 `coarse = ...` 那行),一个粗格一个数。LUH2 是 0.25°,
-目标是 1/24°,正好 **6×6 细格对一个粗格**,且两者边界都落在 0.25° 整数倍上(细格边
-从 24.0 / −95.0 起),完全对齐。
+旧版里 `F_c` 是 **LUH2 文件里该 0.25° 格当年的原始值**。LUH2 是 0.25°,
+目标是 1/24°,正好 **6×6 细格对一个粗格**,且两者边界都落在 0.25° 整数倍上
+(细格边从 24.0 / −95.0 起),完全对齐。块内输出 = 常数 `F_c` × 归一化权重,
+而 SEUS 的森林权重在 0.25° 内相当均匀,所以旧版累计图会显出硬方块。
 
-块内输出 = 常数 `F_c` × 归一化权重,而 SEUS 的森林权重在 0.25° 内相当均匀 → `F_c`
-主导图案。实测粗格间累计采伐面积 CV = **0.536**。**方块画年均还是累计都不会消失**,
-它就是 LUH2 的真实分辨率。
+当前版(2026-08-28 起)把 `F_c` 换成平滑后的 `F_smooth`:读取 LUH2 粗格值后,
+先按 s4_2 的 `_normalized_conv_smooth` 做 normalized-convolution Gaussian 平滑
+(`sigma=1.0`;NaN/ocean 不作为 0 邻居),再进入同一个面积守恒下采样公式。这样并不
+改变 LUH2 原始分辨率这个事实,但下采样输入的粗格振幅不再在 0.25° 边界硬跳。
+old-vs-new 图(`fig_harvest_smooth_old_vs_new_maps_<SSP>*.png`)已确认方块被平滑,
+差值呈边界扩散的预期模式。
 
 ### 11.5 Ouachita 空洞:LUH2 与 NLCD 的森林分类分歧
 
@@ -405,7 +421,7 @@ frac_i = F_c × w_i × Σ_c(area) / Σ_c(w·area)        w = tree_share × natve
 丢失。**实测 0 个这样的粗格**。只有 39 个粗格是"LUH2 有采伐但完全无 natveg"
 (沿海/水域),未落地 0.03–0.16 Mha,可忽略。
 
-用**静态** natveg 反推的落地面积是 LUH2 源的 **101.7–102.5%**。这正是文件属性
+用**静态** natveg 反推的落地面积是 smoothed LUH2 源的 **101.7–102.5%**。这正是文件属性
 `harvest_natveg_convention` 说的 `natveg_static/natveg_annual` 因子(下采样时归一化
 用的是逐年谐调 natveg,受城市化影响逐年缩小)。**跨情景比较不受影响**(同一约定),
 但绝对采伐量不要直接引用。
@@ -601,8 +617,9 @@ argparse 拒绝），以及 `submit_landuse_future.sbatch`、`submit_harmonize_r
 转换期间四个 `<成品>.nc4-orig`（151–154 MB，共约 0.6 GB）一直留在盘上，等
 逐字节验证过、且用户明确确认之后才删。现已删除。
 
-`outputs/processed/` 现在只剩四个正式情景的成品，没有 `.classic-tmp`、没有
-`.nc4-orig`、没有 SSP4：
+`outputs/processed/` 在 2026-08-21 容器转换收尾时只剩四个正式情景的成品，
+没有 `.classic-tmp`、没有 `.nc4-orig`、没有 SSP4（2026-08-28 后又新增/保留了
+归档目录和 `harvest_scenarios/`，当前清单见 §13.1）：
 
 ```
 landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc
@@ -639,8 +656,8 @@ regrid + delta 技巧，因为 `downscale_harvest()` 本来就直接在 SEUS 目
   输出文件新增 `harvest_smoothing_note` 属性说明平滑方法与 sigma。
 - `harvest_scenarios/scripts/build_harvest_scenarios.py`：新增 `--only-rh`，
   只重建 RH（= Default HARVEST_* × 0.5，是三个管理情景里唯一会随 Default
-  harvest 改变的），不会连带重跑 RF/DF（两者 HARVEST_* 恒为 0，与 harvest 场
-  本身无关）。
+  harvest 数值改变的）。RF/DF 的 HARVEST_* 恒为 0；RF 当前另按 smoothHARV
+  historical lineage 做 provenance 版本,不是因为 harvest 数值会变。
 - `jobs/submit_landuse_future_array.sbatch`：新增，`--array=0-3` 一次重建全部
   4 个 SSP（取代原先"循环 3 个 + SSP3 单独一个"的拆分，见 §5 的说明——那个拆分
   只是为了在 2026-07-29 补 SSP3 时不动已验证的另外 3 个，这次全部都要重建，
@@ -655,27 +672,48 @@ regrid + delta 技巧，因为 `downscale_harvest()` 本来就直接在 SEUS 目
 
 ### 13.1 最终产出清单（供下游 0.5° 聚合流水线使用）
 
-**内容变化的 8 个文件**——只有这些文件的 `HARVEST_*` 变了，需要下游 0.5° 聚合
-重新跑：
+**需要下游 0.5° 聚合重新处理的输入**:
+
+1. 历史 smoothHARV 文件(1850-2023):Step 4 historical 0.5° 必须从这个版本聚合,
+   不是从旧的 unsmoothed c260723 聚合。
+
+```
+/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/Make_surface_data/surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc
+```
+
+2. Future Default 4 个 SSP(2024-2100):整段 future `HARVEST_*` 是新的
+   smoothed-LUH2 下采样结果,不是只改 splice/anchor,所以要重新走 Step 4 的
+   0.5° 聚合脚本。
 
 ```
 outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc
+```
+
+3. RH 4 个 SSP(2024-2100):RH = Default `HARVEST_* × 0.5`,已随新 Default
+   重建；如果 half-degree 项目需要 RH,也必须从新版 RH 重新聚合。
+
+```
 outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_RH_simyr2024-2100.nc
 ```
 
-全部 8 个都是 2.2 GB、经典 `NETCDF3_64BIT_OFFSET`、`time` unlimited、无
+Future Default/RH 这 8 个都是 2.2 GB、经典 `NETCDF3_64BIT_OFFSET`、`time` unlimited、无
 `_FillValue`，schema 与之前完全一致，Slurm job `492947`（Default）/`493002`
 （RH）2026-08-28 生成。
 
-**未变化、不需要重跑 0.5° 聚合的文件**（`HARVEST_*` 恒为 0，与本次改动无关）：
+**管理情景边界**:
+
+- RF 的 `HARVEST_*` 恒为 0,不因 LUH2 harvest smoothing 产生数值变化；但当前流程
+  以 smoothHARV historical file 作为正式历史 lineage,所以 RF 要从这个正式 anchor
+  重建/保留为当前 provenance 版本。重建后科学场应与旧 RF 一致(除 metadata/lineage),
+  但下游若要一套自洽的 current inputs,应使用重建后的 RF。
+- DF 的 `HARVEST_*` 也恒为 0,且定义逐年跟随 Default 的 `PCT_NAT_PFT`。本次 harvest-only
+  smoothing 不改变 Default `PCT_NAT_PFT`,因此 DF 数值不变；只有在需要统一 provenance
+  时才重建。
 
 ```
 outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_RF_simyr2024-2100.nc
 outputs/processed/harvest_scenarios/landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_DF_simyr2024-2100.nc
 ```
-
-历史段 `.../surfdata_results/landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc`
-也未动——本次只改了 future（2024-2100）harvest 下采样。
 
 **旧版本（平滑前）已归档，未删除**：
 
@@ -716,9 +754,9 @@ Default（job `492947`，4 个 array task 全 COMPLETED exit 0）：
 RH（job `493002`，重跑后 4 个 array task 全 COMPLETED exit 0；首次提交 `492965`
 因 `--only-rh` 的一处诊断打印用了未加载的 `default_pft` 崩溃——RH 文件本身在崩溃前
 已写完并通过 `clone_structure` 自带完整性校验，不是坏文件，代码已修复见下方
-commit）：`HARVEST_VH1`/`HARVEST_SH1` 的 new/old 比值 4 个 SSP 全部精确
-`0.500000`；域总采伐量相对变化与 Default 逐 SSP 完全一致（同一个 rel_diff，
-因为 RH 只是 Default×0.5）。
+commit）：`HARVEST_VH1`/`HARVEST_SH1` 的 **new RH / new Default** 比值 4 个 SSP
+全部精确 `0.500000`；RH old-vs-new 的域总采伐量相对变化与 Default 逐 SSP 完全一致
+（同一个 rel_diff，因为 RH 只是对应 Default×0.5）。
 
 可视化：`scripts/analysis/12_harvest_smooth_compare.py` 出的 map 对比图
 （2024/2064/2100，`PowerNorm`/`SymLogNorm` 配色）清楚显示 old 版本的 0.25° 方块
@@ -736,6 +774,15 @@ job array + 本节文档 → `f8a58dc` 改进对比图配色 → `07ef631` 修 `
 ### 13.4 下一步：0.5° 聚合（未做，留给另一次会话）
 
 按 §3 的原则："先在 4km 上做完，再走 Default 已定的那套 0.5° 聚合流水线，不要
-在 0.5° 网格上独立重算"——本节 13.1 列出的 8 个文件就是那条流水线需要重新处理
-的输入；RF、4 个 DF、历史段不需要重跑（内容未变）。0.5° 聚合流水线本身在
-`SEUS_halfdeg` 项目里，不在本仓库。
+在 0.5° 网格上独立重算"。`SEUS_halfdeg` 需要从本节 13.1 的 current 4km 输入重跑
+Step 4：
+
+- historical 0.5° 从 historical smoothHARV 聚合；
+- future Default 4 SSP 从新版 future smoothHARV Default 聚合；
+- RH 如需管理情景,从新版 RH 聚合；
+- RF 使用基于 smoothHARV historical lineage 的当前 RF；如果 half-degree 项目需要
+  RF,从该 RF 聚合,不要在 0.5° 上重新实现 RF 变换；
+- DF 数值不受 harvest smoothing 影响,除非为了 provenance 统一才重建/重聚合。
+
+Step 5/Step 6 的 0.5° 气候强迫是独立数据源,不受本次 landuse/harvest 更新影响。
+0.5° 聚合流水线本身在 `SEUS_halfdeg` 项目里，不在本仓库。

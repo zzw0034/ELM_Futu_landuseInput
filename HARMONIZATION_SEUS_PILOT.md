@@ -7,7 +7,11 @@
   `landuse.timeseries` (324×504) and a Chen file re-aggregated onto that grid
   (`01 --like <target>`). Writes
   `outputs/processed/landuse.timeseries_SEUS_1_24deg_nlcd2elm_<SSP>_simyr2024-2100.nc`.
-  Details: `FUTURE_LANDUSE_TIMESERIES.md`.
+  Current production runs should use the smoothHARV historical target
+  `landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc`
+  as the reference/anchor lineage. Its static fields and `PCT_NAT_PFT` match
+  the original c260723 file; only historical `HARVEST_*` changed. Details:
+  `FUTURE_LANDUSE_TIMESERIES.md`.
 - **Standalone (not maintained):** `02` without `--build-timeseries`. Crops the
   CONUS NLCD + CONUS Chen files to the SEUS bbox as this spec describes, and
   writes `harmonized_SEUS_<SSP>_*.nc`. It exits if those CONUS Chen files are
