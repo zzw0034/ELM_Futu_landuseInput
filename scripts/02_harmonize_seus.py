@@ -19,6 +19,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import xarray as xr
+from scipy.ndimage import gaussian_filter
 
 sys.path.insert(0, "/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput/src")
 from elm_landuse.chen_classes import ELM_PFT_NAMES, NPFT  # noqa: E402
@@ -94,6 +95,22 @@ def group_sum(p):
 # and the LUT denominator, matching s4_2 -- see downscale_harvest's docstring.
 # Helper functions (_safe_float32, _fraction_if_percent, _build_hr_to_coarse_index,
 # _distribute_conservatively) are copied verbatim from s4_2_donwscale_LUH2harvest.py.
+#
+# Harvest pre-smoothing (added 2026-08-28, matching s4_2's 2026-08 update):
+# the raw 0.25 deg LUH2 harvest fields are only defined at that resolution, so
+# even this area-conserving downscaling faithfully carries a hard step at
+# every LUH2 cell boundary into the 4km output (documented in
+# FUTURE_LANDUSE_TIMESERIES.md sec 11.4 as "0.25 deg blocks -- LUH2's real
+# resolution, not a bug"). SMOOTH_HARVEST_BEFORE_DOWNSCALE applies the same
+# normalized-convolution Gaussian smoothing s4_2 now uses to each coarse
+# field first (see _normalized_conv_smooth), so the amplitude driving the
+# downscaling varies continuously instead of jumping at 0.25 deg cell edges.
+# Downstream of that one substitution -- _distribute_conservatively, the LUT
+# unit conversion, and the <=1 five-category cap -- is unchanged: it now
+# conserves harvested AREA per coarse cell for the SMOOTHED coarse field
+# rather than the raw one. No CONUS->SEUS remap/delta trick is needed here
+# (unlike s4_2's own landuse.timeseries patch): downscale_harvest() already
+# produces output directly on the SEUS target grid.
 # ============================================================================
 
 LUH_DIR = Path("/projects/hpcl-cli185/proj-shared/zw5/luh")
@@ -114,10 +131,46 @@ TREE_PFT_IDXS = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.int64)
 LUH_SSP_YEAR0 = 2015  # LUH2 v2f SSP transitions start at calendar 2015
 LUH_SSP_LAST = 2099  # ... and end at calendar 2099
 
+# sigma in units of 0.25 deg LUH2 grid cells. Matches s4_2's default.
+SMOOTH_HARVEST_BEFORE_DOWNSCALE = True
+HARVEST_SMOOTH_SIGMA_CELLS = 1.0
+
 
 def _safe_float32(arr):
     out = np.asarray(arr, dtype=np.float32)
     np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    return out
+
+
+def _normalized_conv_smooth(values, valid, sigma):
+    """Normalized-convolution Gaussian smoothing (copied verbatim from
+    s4_2_donwscale_LUH2harvest.py).
+
+    A plain ``gaussian_filter`` on a 0-filled array treats missing/ocean
+    cells as real zero-harvest neighbors, diluting coastal/edge land cells
+    toward the ocean. This smooths the data and a 0/1 validity weight
+    separately and divides, so invalid cells contribute nothing to nearby
+    valid cells' averages. Where no valid data exists within range (weight
+    ~0), returns 0.0, matching this script's existing "missing -> 0"
+    convention (see _safe_float32).
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Data array; values at invalid cells are ignored (any placeholder ok,
+        e.g. already 0-filled).
+    valid : np.ndarray  (bool, same shape as values)
+        True where `values` is real (not missing/ocean).
+    sigma : float
+        Gaussian sigma, in grid-cell units.
+    """
+    filled = np.where(valid, values, 0.0).astype(np.float64)
+    weight = valid.astype(np.float64)
+    smoothed_values = gaussian_filter(filled, sigma=sigma)
+    smoothed_weight = gaussian_filter(weight, sigma=sigma)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = smoothed_values / smoothed_weight
+    out[smoothed_weight < 1e-6] = 0.0
     return out
 
 
@@ -182,8 +235,17 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
                                   the weight and the LUT denominator). NOTE: this is
                                   deliberately NOT the static PCT_NATVEG written to the
                                   output file -- see build_landuse_timeseries.
+
+    If SMOOTH_HARVEST_BEFORE_DOWNSCALE is True (default), each 0.25 deg LUH2
+    coarse harvest field is passed through _normalized_conv_smooth (sigma =
+    HARVEST_SMOOTH_SIGMA_CELLS coarse cells) before _distribute_conservatively
+    runs, so the source of every downscaled field is the SMOOTHED LUH2 harvest,
+    not the raw per-0.25-deg-cell value. The output is still an exact area-
+    conserving redistribution -- of the smoothed coarse field.
+
     Returns dict out_name -> (nout,ny,nx) float32 [LUT units, fraction of veg unit],
-    plus a list of per-year area-conservation ratios (placed / allocatable LUH2 area).
+    plus a list of per-year area-conservation ratios (placed / allocatable
+    SMOOTHED-LUH2 area).
     """
     nout = len(out_years)
     assert natveg_pct.shape[0] == nout, "natveg_pct must be annual (nout,ny,nx)"
@@ -223,7 +285,23 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
         luh_area = 0.0
         placed = 0.0
         for luh_name, out_name in HARVEST_VAR_MAP.items():
-            coarse = _safe_float32(luh[luh_name].isel(time=hidx).values[lat_sort, :])
+            coarse_raw = luh[luh_name].isel(time=hidx).values[lat_sort, :]
+            if SMOOTH_HARVEST_BEFORE_DOWNSCALE:
+                # xarray's default mask_and_scale turns the file's
+                # missing_value sentinel (ocean/non-LUH2-land) into NaN on
+                # read; capture that as the validity mask *before*
+                # _safe_float32 would zero-fill it away and lose it -- see
+                # _normalized_conv_smooth.
+                coarse_valid = np.isfinite(coarse_raw)
+                coarse = _safe_float32(
+                    _normalized_conv_smooth(
+                        np.nan_to_num(coarse_raw, nan=0.0),
+                        coarse_valid,
+                        sigma=HARVEST_SMOOTH_SIGMA_CELLS,
+                    )
+                )
+            else:
+                coarse = _safe_float32(coarse_raw)
             hr, ca_sums, _, _, _, _ = _distribute_conservatively(
                 coarse, w, area_hr, coarse_id, inside, ncoarse
             )
@@ -395,8 +473,9 @@ def build_landuse_timeseries(args):
     grazing_out = np.repeat(grazing23[None], len(out_years), axis=0).astype(
         np.float32
     )  # persist 2023
+    _smooth_tag = "smoothed-LUH2" if SMOOTH_HARVEST_BEFORE_DOWNSCALE else "raw-LUH2"
     print(
-        f"  harvest area-conservation (placed/allocatable LUH2): "
+        f"  harvest area-conservation (placed/allocatable {_smooth_tag}): "
         f"min {min(cons):.4f} mean {float(np.mean(cons)):.4f} max {max(cons):.4f}"
     )
     for v in (
@@ -510,7 +589,8 @@ def build_landuse_timeseries(args):
         harmonized_note=(
             f"future 2024-2100: NLCD-2023 state (from {Path(tgt).name}) + "
             f"Chen {args.scenario} trend (harmonize_seus.py §13); harvest downscaled "
-            f"from LUH2 {LUH_FILE[args.scenario]} (forest-weighted, area-conserving); "
+            f"from {'smoothed ' if SMOOTH_HARVEST_BEFORE_DOWNSCALE else ''}LUH2 "
+            f"{LUH_FILE[args.scenario]} (forest-weighted, area-conserving); "
             f"GRAZING persisted from target 2023; natveg=0 -> 100% bare"
         ),
         harvest_natveg_convention=(
@@ -519,6 +599,28 @@ def build_landuse_timeseries(args):
             "PCT_NATVEG in this file is the target's STATIC column and is NOT the "
             "denominator used; ELM's recovered harvest area therefore carries a factor "
             "natveg_static/natveg_annual."
+        ),
+        harvest_smoothing_note=(
+            (
+                "Each 0.25 deg LUH2 coarse harvest field (primf/primn/secmf/secyf/"
+                f"secnf_harv) was smoothed with normalized-convolution Gaussian "
+                f"smoothing (sigma={HARVEST_SMOOTH_SIGMA_CELLS:g} 0.25-deg coarse "
+                "cells; ocean/non-LUH2-land cells excluded from the convolution "
+                "weight, not treated as zero-harvest) BEFORE the forest-weighted, "
+                "area-conserving downscale to this grid -- matching "
+                "s4_2_donwscale_LUH2harvest.py's 2026-08 SMOOTH_HARVEST_BEFORE_"
+                "DOWNSCALE update. This removes the hard step at every LUH2 cell "
+                "boundary that a raw-coarse-field downscale would carry into the "
+                "4km output (see FUTURE_LANDUSE_TIMESERIES.md sec 11.4). The area-"
+                "conservation diagnostic printed at build time conserves harvested "
+                "area against the SMOOTHED coarse field, not the raw one."
+            )
+            if SMOOTH_HARVEST_BEFORE_DOWNSCALE
+            else (
+                "Harvest downscaling used the RAW (unsmoothed) 0.25 deg LUH2 "
+                "coarse field; SMOOTH_HARVEST_BEFORE_DOWNSCALE was False at build "
+                "time."
+            )
         ),
     )
 

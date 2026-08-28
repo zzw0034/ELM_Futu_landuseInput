@@ -57,6 +57,17 @@ Usage:
     build_harvest_scenarios.py            # all 4 SSPs, sequentially
     build_harvest_scenarios.py 2          # only ALL_SSPS[2], for Slurm job arrays
     build_harvest_scenarios.py SSP2_RCP45 # same, by name
+    build_harvest_scenarios.py --only-rh              # RH only, all 4 SSPs, no RF/DF
+    build_harvest_scenarios.py --only-rh SSP2_RCP45    # RH only, one SSP
+
+--only-rh (added 2026-08-28, for the Default harvest-smoothing rebuild): skip
+RF and DF entirely and only (re)build RH = Default HARVEST_* x RH_SCALE. RF
+and DF zero out HARVEST_* by construction, so neither depends on whether the
+Default harvest field was smoothed before downscaling -- rebuilding them
+after a Default-only harvest change would spend the same ~I/O-heavy full
+copy-and-write for byte-identical output. RH is the only one of the three
+that reads Default's HARVEST_* values, so it is the only one that needs to
+change.
 """
 import os
 import sys
@@ -74,12 +85,18 @@ os.makedirs(OUT_DIR, exist_ok=True)
 # seus_task_backlog memory).
 ALL_SSPS = ["SSP1_RCP19", "SSP2_RCP45", "SSP3_RCP70", "SSP5_RCP85"]
 
+# --only-rh may appear anywhere in argv; strip it before parsing the
+# positional SSP selector. See module docstring for why this exists.
+_argv = sys.argv[1:]
+ONLY_RH = "--only-rh" in _argv
+_argv = [a for a in _argv if a != "--only-rh"]
+
 # Optional CLI arg selects a single SSP (index or name) so the 4 SSPs can be
 # run as a Slurm job array -- the per-SSP loop body is fully independent
 # (shared inputs are read-only, outputs have disjoint filenames). With no
 # arg, all 4 run sequentially in one process.
-if len(sys.argv) > 1:
-    sel = sys.argv[1]
+if len(_argv) > 0:
+    sel = _argv[0]
     if sel.isdigit():
         i = int(sel)
         if not 0 <= i < len(ALL_SSPS):
@@ -91,7 +108,10 @@ if len(sys.argv) > 1:
         sys.exit(f"unknown SSP {sel!r}; expected one of {ALL_SSPS} or an index 0..{len(ALL_SSPS)-1}")
 else:
     SSPS = list(ALL_SSPS)
-print(f"[setup] building scenarios for: {', '.join(SSPS)}")
+print(
+    f"[setup] building scenarios for: {', '.join(SSPS)}"
+    + (" (--only-rh: RF/DF skipped)" if ONLY_RH else "")
+)
 
 HARVEST_VARS = ["HARVEST_VH1", "HARVEST_VH2", "HARVEST_SH1", "HARVEST_SH2", "HARVEST_SH3"]
 
@@ -255,7 +275,7 @@ ntime = years.size
 r = ramp(years)
 increment_target = full_increment[None, :, :] * r[:, None, None]
 
-if ALL_SSPS[0] in SSPS:
+if ALL_SSPS[0] in SSPS and not ONLY_RH:
     # RF's land cover is SCENARIO-INDEPENDENT by design: it is a policy
     # prescription ("restore forest toward the 1850 extent by 2050, then hold
     # it"), not a perturbation layered on each SSP's own land trajectory. So
@@ -337,6 +357,8 @@ if ALL_SSPS[0] in SSPS:
     print(f"[RF] wrote {out_rf}")
 
     del rf_pft, rf_overrides
+elif ONLY_RH:
+    print("[RF] skipped -- --only-rh requested, RF/DF untouched")
 else:
     print(f"[RF] skipped -- RF is scenario-independent and is built by the "
           f"{ALL_SSPS[0]} task; run --array=0 (or no argument) to produce it")
@@ -346,7 +368,10 @@ for ssp in SSPS:
     default_path = os.path.join(DEFAULT_DIR, f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ssp}_simyr2024-2100.nc")
     with nc4.Dataset(default_path) as ds:
         years = np.array(ds["YEAR"][:])
-        default_pft = np.array(ds["PCT_NAT_PFT"][:])            # (time, natpft, lat, lon)
+        # PCT_NAT_PFT (time,natpft,lat,lon) is ~1.7GB and only needed by DF;
+        # skip the read under --only-rh to keep that mode's memory footprint
+        # well under the 96g budget measured for the full RF+DF+RH build.
+        default_pft = None if ONLY_RH else np.array(ds["PCT_NAT_PFT"][:])
         default_harvest = {v: np.array(ds[v][:]) for v in HARVEST_VARS}
         # Independent, time-invariant validation mask (see clone_structure).
         natveg_mask = np.array(ds["PCT_NATVEG"][:]) > 0
@@ -356,27 +381,35 @@ for ssp in SSPS:
     increment_target = full_increment[None, :, :] * r[:, None, None]   # (time, lat, lon)
 
     # ---------------- DF ----------------
-    default_forest = group_sum(default_pft, TREE_PFT)   # (time, lat, lon)
-    df_pft = default_pft.copy()
-    for k in TREE_PFT:
-        df_pft[:, k, :, :] = 0.0
-    for k in GRASS_PFT:
-        df_pft[:, k, :, :] = default_pft[:, k, :, :] + default_forest * w_grass[k][None, :, :]
+    # DF's HARVEST_* is zeroed by construction (see section header) and does
+    # not depend on Default's harvest field at all, so --only-rh skips it:
+    # rebuilding would cost the same full read/write and produce byte-
+    # identical output to what is already on disk.
+    out_df = None
+    if not ONLY_RH:
+        default_forest = group_sum(default_pft, TREE_PFT)   # (time, lat, lon)
+        df_pft = default_pft.copy()
+        for k in TREE_PFT:
+            df_pft[:, k, :, :] = 0.0
+        for k in GRASS_PFT:
+            df_pft[:, k, :, :] = default_pft[:, k, :, :] + default_forest * w_grass[k][None, :, :]
 
-    df_harvest = {v: np.zeros_like(default_harvest[v]) for v in HARVEST_VARS}
-    overrides = {"PCT_NAT_PFT": df_pft}
-    overrides.update(df_harvest)
-    out_df = os.path.join(OUT_DIR, f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ssp}_DF_simyr2024-2100.nc")
-    clone_structure(default_path, out_df, overrides,
-                     f"DF (deforestation counterfactual, NOT frozen/protected forest): all "
-                     f"forest cleared instantaneously every year 2024-2100, routed to grass "
-                     f"(2023 local composition, SEUS-wide C3=85%/C4=15% fallback where 2023 "
-                     f"grass=0), locked at zero -- never regrows. HARVEST_* zeroed. This is a "
-                     f"deliberate, unrestricted theoretical upper bound for Default-DF "
-                     f"'avoiding deforestation' accounting -- not an implementable scenario. "
-                     f"Built {os.path.basename(__file__)}, definitions locked 2026-08-19.",
-                     natveg_mask=natveg_mask)
-    print(f"[DF] wrote {out_df}")
+        df_harvest = {v: np.zeros_like(default_harvest[v]) for v in HARVEST_VARS}
+        overrides = {"PCT_NAT_PFT": df_pft}
+        overrides.update(df_harvest)
+        out_df = os.path.join(OUT_DIR, f"landuse.timeseries_SEUS_1_24deg_nlcd2elm_{ssp}_DF_simyr2024-2100.nc")
+        clone_structure(default_path, out_df, overrides,
+                         f"DF (deforestation counterfactual, NOT frozen/protected forest): all "
+                         f"forest cleared instantaneously every year 2024-2100, routed to grass "
+                         f"(2023 local composition, SEUS-wide C3=85%/C4=15% fallback where 2023 "
+                         f"grass=0), locked at zero -- never regrows. HARVEST_* zeroed. This is a "
+                         f"deliberate, unrestricted theoretical upper bound for Default-DF "
+                         f"'avoiding deforestation' accounting -- not an implementable scenario. "
+                         f"Built {os.path.basename(__file__)}, definitions locked 2026-08-19.",
+                         natveg_mask=natveg_mask)
+        print(f"[DF] wrote {out_df}")
+    else:
+        print("[DF] skipped -- --only-rh requested")
 
     # ---------------- RH ----------------
     rh_harvest = {v: default_harvest[v] * RH_SCALE for v in HARVEST_VARS}
@@ -420,11 +453,12 @@ for ssp in SSPS:
     else:
         print(f"[RF] shared RF file not present yet; run the {ALL_SSPS[0]} task to build it")
 
-    with nc4.Dataset(out_df) as ds:
-        tree_check = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
-        print(f"[DF] max residual tree PFT after clearing: {float(tree_check.max()):.6f} (should be 0)")
-        for v in HARVEST_VARS:
-            print(f"[DF] {v} max|value|: {float(np.abs(ds[v][:]).max()):.6f} (should be 0)")
+    if out_df is not None:
+        with nc4.Dataset(out_df) as ds:
+            tree_check = group_sum(np.array(ds["PCT_NAT_PFT"][:]), TREE_PFT)
+            print(f"[DF] max residual tree PFT after clearing: {float(tree_check.max()):.6f} (should be 0)")
+            for v in HARVEST_VARS:
+                print(f"[DF] {v} max|value|: {float(np.abs(ds[v][:]).max()):.6f} (should be 0)")
 
     with nc4.Dataset(default_path) as dso, nc4.Dataset(out_rh) as dsn:
         for v in HARVEST_VARS:
@@ -435,7 +469,10 @@ for ssp in SSPS:
                   f"(expect {RH_SCALE})"
                   if so else f"[RH] {v}: default_total=0 (SEUS-wide zero, ratio undefined)")
 
-n_rf = 1 if ALL_SSPS[0] in SSPS else 0
-print(f"\nDone: {len(SSPS)} SSP(s) x 2 per-SSP scenarios (DF, RH) + {n_rf} shared RF "
-      f"= {len(SSPS)*2 + n_rf} files written to {OUT_DIR}")
-print("Full set is 4 SSP x 2 + 1 shared RF = 9 files.")
+if ONLY_RH:
+    print(f"\nDone (--only-rh): {len(SSPS)} RH file(s) written to {OUT_DIR}; RF/DF untouched")
+else:
+    n_rf = 1 if ALL_SSPS[0] in SSPS else 0
+    print(f"\nDone: {len(SSPS)} SSP(s) x 2 per-SSP scenarios (DF, RH) + {n_rf} shared RF "
+          f"= {len(SSPS)*2 + n_rf} files written to {OUT_DIR}")
+    print("Full set is 4 SSP x 2 + 1 shared RF = 9 files.")
