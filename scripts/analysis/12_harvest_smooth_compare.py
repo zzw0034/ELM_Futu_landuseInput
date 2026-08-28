@@ -49,6 +49,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm, SymLogNorm
 
 ROOT = Path("/projects/hpcl-cli185/proj-shared/zw5/ELM_Futu_landuseInput")
 DEFAULT_OLD_DIR = ROOT / "outputs" / "processed" / "archive_pre_smoothHARV_20260828"
@@ -160,6 +161,21 @@ def make_map_figure(ssp: str, args, old: dict, new: dict) -> Path:
     )
     dvmax = max(dvmax, 1e-12)  # avoid a degenerate 0..0 diverging norm
 
+    # Harvest fraction is dominated by a handful of hot cells against a sea of
+    # near-zero ones: a plain linear vmin/vmax scale (like a first cut of this
+    # script used) crushes everything but those outliers to one pale color,
+    # hiding exactly the sub-hotspot spatial detail (0.25 deg blocks, the
+    # smoothing effect) this figure exists to show. Match the project's own
+    # s4_2 orig-vs-smoothHARV precedent
+    # (ELM_makeSurfdata/.../plot_landuse_harvest_orig_vs_smoothHARV_20yr.py):
+    # PowerNorm(gamma<1) for the sequential old/new panels stretches the low
+    # end without moving vmax (still the true max, so nothing is clipped).
+    # The diff panel is signed and needs the same low-end stretch on both
+    # sides of zero, which PowerNorm cannot do; SymLogNorm gives that
+    # (linear near 0, log further out) while still hitting the true +/-dvmax.
+    seq_norm = PowerNorm(gamma=0.45, vmin=0.0, vmax=vmax)
+    diff_norm = SymLogNorm(linthresh=max(dvmax * 1e-3, 1e-9), vmin=-dvmax, vmax=dvmax)
+
     nrow = len(args.years)
     fig, axes = plt.subplots(
         nrow, 3, figsize=(12.5, 3.6 * nrow), constrained_layout=True, squeeze=False
@@ -171,12 +187,12 @@ def make_map_figure(ssp: str, args, old: dict, new: dict) -> Path:
         o = old["frac_sum"][i]
         n = new["frac_sum"][i]
         d = n - o
-        for c, (field, cmap, vmin_, vmax_) in enumerate(
-            [(o, "YlOrBr", 0.0, vmax), (n, "YlOrBr", 0.0, vmax), (d, "RdBu_r", -dvmax, dvmax)]
+        for c, (field, cmap, norm) in enumerate(
+            [(o, "YlOrBr", seq_norm), (n, "YlOrBr", seq_norm), (d, "RdBu_r", diff_norm)]
         ):
             ax = axes[r][c]
             im = ax.imshow(field, origin="lower", extent=ext, cmap=cmap,
-                            vmin=vmin_, vmax=vmax_, interpolation="nearest")
+                            norm=norm, interpolation="nearest")
             ax.set_aspect(aspect)
             ax.set_xticks([])
             ax.set_yticks([])
