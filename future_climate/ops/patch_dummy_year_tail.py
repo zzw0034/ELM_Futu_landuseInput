@@ -41,10 +41,13 @@ script does not check that for you.
 longer matches any pre-existing `data/intermediate/future_forcing_<ssp>_
 <var>_build.json` produced by the original build script. This script does
 NOT touch that file (preserves the original build provenance); instead, with
---record-dir, it writes a SEPARATE `<basename>.patch_record.json` alongside
-it recording old/new sha256 (opt-in via --sha256, since a full 96GB 4 km file
-hash is a meaningful chunk of wall time -- expect several minutes on
-/projects NFS), changed-cell count, timestamp, and this script's git commit.
+--record-dir, it writes a SEPARATE `<tag>_<scenario>_<basename>.patch_
+record.json` alongside it (see record_stem() -- basename alone collides
+across scenarios AND across the three known locations, since every
+scenario's file for a given var shares the exact same basename) recording
+old/new sha256 (opt-in via --sha256, since a full 96GB 4 km file hash is a
+meaningful chunk of wall time -- expect several minutes on /projects NFS),
+changed-cell count, timestamp, and this script's git commit.
 
 usage:
   patch_dummy_year_tail.py --file /path/to/DBCCA_..._z01.nc --var TBOT
@@ -67,6 +70,34 @@ import numpy as np
 DUMMY_YEAR_LEN = 2920
 LAST_DUMMY_RECORD = DUMMY_YEAR_LEN - 1     # 0-indexed: 2919
 FIRST_REAL_RECORD = DUMMY_YEAR_LEN         # 0-indexed: 2920
+
+# The three known locations this fix touches -- mapped to a short tag for
+# the patch-record filename. All three scenarios' files share the exact
+# same basename (DBCCA_Daymet_TESSFA2_<VAR>_2023-2100_z01.nc), so basename
+# alone collides across scenarios AND across these three locations; a record
+# filename built from basename alone silently overwrites a previous record.
+KNOWN_ROOTS = {
+    "/scratch/hpcl-cli185/zw5/future_clim": "scratch",
+    "/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/"
+    "Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim": "worldshared",
+    "/projects/hpcl-cli185/proj-shared/zw5/SEUS_halfdeg/data/processed/"
+    "cpl_bypass_0p5deg_future": "halfdeg0p5",
+}
+
+
+def record_stem(file_path):
+    """A patch-record filename stem that stays unique across scenario AND
+    location. Recognizes the three known future-forcing roots (tags each
+    with a short name, prefixes the scenario -- the file's parent directory
+    name) and falls back to the full sanitized path for anything else,
+    so an unrecognized location still gets a collision-free name rather
+    than silently colliding on basename."""
+    p = os.path.abspath(file_path)
+    for root, tag in KNOWN_ROOTS.items():
+        if p.startswith(root + "/"):
+            scenario = os.path.basename(os.path.dirname(p))
+            return f"{tag}_{scenario}_{os.path.basename(p)}"
+    return p.strip("/").replace("/", "_")
 
 
 def sha256_of(path, chunk_size=1 << 20):
@@ -98,9 +129,11 @@ def main():
                     help="compute whole-file sha256 before and after (slow on "
                          "large 4km files -- several minutes each on /projects NFS)")
     ap.add_argument("--record-dir", default=None,
-                    help="write <basename>.patch_record.json here (requires --sha256 "
-                         "for old/new sha256 fields to be populated; without it, "
-                         "the record still captures changed-cell count and timestamp)")
+                    help="write a patch record JSON here, named by record_stem() -- "
+                         "location tag + scenario + basename, collision-free across "
+                         "scenarios and locations (requires --sha256 for old/new "
+                         "sha256 fields to be populated; without it, the record still "
+                         "captures changed-cell count and timestamp)")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -162,8 +195,7 @@ def main():
             patch_script_commit=git_commit_of(__file__),
             slurm_job_id=os.environ.get("SLURM_JOB_ID", "none"),
         )
-        rp = os.path.join(args.record_dir,
-                          f"{os.path.basename(args.file)}.patch_record.json")
+        rp = os.path.join(args.record_dir, f"{record_stem(args.file)}.patch_record.json")
         with open(rp, "w") as fh:
             json.dump(record, fh, indent=2, sort_keys=True)
         print(f"  patch record: {rp}")
