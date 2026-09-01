@@ -24,13 +24,41 @@ use the same DUMMY_YEAR_LEN=2920 and the same (n, DTIME) layout, so one script
 covers both resolutions -- pass the file path directly, this script does not
 need to know which pipeline produced it.
 
+**Idempotent and safe to retry.** The write only ever sets DTIME index
+LAST_DUMMY_RECORD to a value read from DTIME index FIRST_REAL_RECORD, which
+this script never modifies -- so an interrupted run (leaving some rows
+patched and others not) is fully recovered by simply running the script
+again; it converges to the same final state regardless of how many times it
+is interrupted or re-run. There is no NetCDF3 transactional protection
+against a crash mid-write, but there is nothing for a retry to get wrong.
+
+**Before running this against a canonical/production file**: confirm no
+Slurm job is currently reading it (`squeue -u $USER`, check for a running
+future case pointing `metdata_bypass` at this file's directory) -- this
+script does not check that for you.
+
+**Build-record staleness**: patching changes the file's sha256, which no
+longer matches any pre-existing `data/intermediate/future_forcing_<ssp>_
+<var>_build.json` produced by the original build script. This script does
+NOT touch that file (preserves the original build provenance); instead, with
+--record-dir, it writes a SEPARATE `<basename>.patch_record.json` alongside
+it recording old/new sha256 (opt-in via --sha256, since a full 96GB 4 km file
+hash is a meaningful chunk of wall time -- expect several minutes on
+/projects NFS), changed-cell count, timestamp, and this script's git commit.
+
 usage:
   patch_dummy_year_tail.py --file /path/to/DBCCA_..._z01.nc --var TBOT
-  patch_dummy_year_tail.py --file ... --var TBOT --dry-run   # report only
+  patch_dummy_year_tail.py --file ... --var TBOT --dry-run       # report only
+  patch_dummy_year_tail.py --file ... --var TBOT --sha256 \\
+      --record-dir /path/to/patch_records/                      # + audit trail
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import os
+import subprocess
 import time
 
 import netCDF4 as nc
@@ -41,6 +69,23 @@ LAST_DUMMY_RECORD = DUMMY_YEAR_LEN - 1     # 0-indexed: 2919
 FIRST_REAL_RECORD = DUMMY_YEAR_LEN         # 0-indexed: 2920
 
 
+def sha256_of(path, chunk_size=1 << 20):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def git_commit_of(script_path):
+    try:
+        here = os.path.dirname(os.path.abspath(script_path))
+        return subprocess.check_output(
+            ["git", "-C", here, "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -49,10 +94,21 @@ def main():
                     choices=["TBOT", "PSRF", "QBOT", "FSDS", "PRECTmms", "WIND", "FLDS"])
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would change, write nothing")
+    ap.add_argument("--sha256", action="store_true",
+                    help="compute whole-file sha256 before and after (slow on "
+                         "large 4km files -- several minutes each on /projects NFS)")
+    ap.add_argument("--record-dir", default=None,
+                    help="write <basename>.patch_record.json here (requires --sha256 "
+                         "for old/new sha256 fields to be populated; without it, "
+                         "the record still captures changed-cell count and timestamp)")
     args = ap.parse_args()
 
-    mode = "r" if args.dry_run else "r+"
     t0 = time.time()
+    sha_before = sha256_of(args.file) if args.sha256 else None
+    if sha_before:
+        print(f"  sha256 before: {sha_before}  ({time.time() - t0:.0f}s)", flush=True)
+
+    mode = "r" if args.dry_run else "r+"
     with nc.Dataset(args.file, mode) as ds:
         v = ds.variables[args.var]
         v.set_auto_maskandscale(False)
@@ -90,6 +146,27 @@ def main():
         print(f"  verified on disk: dummy-year last record now equals real first "
               f"record at every cell; {n_still_diff_from_before:,} cells changed "
               f"({time.time() - t0:.1f}s)")
+
+    sha_after = sha256_of(args.file) if args.sha256 else None
+    if sha_after:
+        print(f"  sha256 after:  {sha_after}  ({time.time() - t0:.0f}s total)", flush=True)
+
+    if args.record_dir:
+        os.makedirs(args.record_dir, exist_ok=True)
+        record = dict(
+            file=args.file, var=args.var,
+            sha256_before=sha_before, sha256_after=sha_after,
+            n_cells_total=n, n_cells_changed=n_still_diff_from_before,
+            last_dummy_record=LAST_DUMMY_RECORD, first_real_record=FIRST_REAL_RECORD,
+            patched_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            patch_script_commit=git_commit_of(__file__),
+            slurm_job_id=os.environ.get("SLURM_JOB_ID", "none"),
+        )
+        rp = os.path.join(args.record_dir,
+                          f"{os.path.basename(args.file)}.patch_record.json")
+        with open(rp, "w") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+        print(f"  patch record: {rp}")
 
 
 if __name__ == "__main__":
