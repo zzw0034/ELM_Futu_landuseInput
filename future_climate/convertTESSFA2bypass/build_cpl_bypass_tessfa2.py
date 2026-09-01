@@ -292,12 +292,31 @@ def main():
     # dimension, so a write covering one year but all rows touches every one
     # of the 225,625 rows non-contiguously. Staging first lets the merge
     # below write each row's full time series in one contiguous block.
+    #
+    # The dummy year's LAST record is the one exception to "every cell holds
+    # the sentinel": the cpl_bypass reader's day-boundary interpolation for a
+    # 2024-01-01 cold start reads exactly this one record (tindex lands on
+    # 365*stepsperday, the dummy year's final index) blended with the real
+    # first record of Y0. Left at the sentinel, that blend pulls TBOT/PBOT/
+    # QBOT/FLDS toward the sentinel's absurd decoded value for the first few
+    # integration steps. Fix: copy Y0's first real packed record verbatim
+    # over the dummy year's last record. No separate land mask needed --
+    # pack_month already writes `raw_sentinel` at every ocean/invalid cell in
+    # the REAL data too (NaN source -> raw_sentinel), so this copy leaves
+    # ocean cells at the sentinel automatically and only changes land cells.
+    # See auto-memory tessfa2-dummy-year-tail-interpolation-fix.
+    first_real_record = pack_month(read_month(args.scenario, var, Y0, 1),
+                                    add_off, scale, raw_sentinel)[0, :]
+
     dummy_path = stage_dir / f"y{DUMMY_YEAR}.nc"
     ds_d, v_d = create_stage_file(dummy_path, var)
-    v_d[:, :] = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
+    dummy_block = np.full((NCELL, STEPS_PER_YEAR), raw_sentinel, dtype=np.int16)
+    dummy_block[:, -1] = first_real_record
+    v_d[:, :] = dummy_block
     ds_d.close()
-    print(f"[{var}/{args.scenario}] dummy year {DUMMY_YEAR} staged "
-          f"({time.time() - t0:.1f}s)", flush=True)
+    print(f"[{var}/{args.scenario}] dummy year {DUMMY_YEAR} staged, last "
+          f"record = {Y0}-01-01 first real record (land cells only; ocean "
+          f"stays sentinel) ({time.time() - t0:.1f}s)", flush=True)
 
     nworkers = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 4))
     n_years = Y1 - Y0 + 1
@@ -333,11 +352,19 @@ def main():
             "metdata_type='era5-daymet-fut') can be set to one year before the future "
             "run's real first year (2024), which avoids a tindex wraparound bug in a "
             "shared bound-check for runs whose first model year equals startyear_met "
-            f"exactly. Every cell of the {DUMMY_YEAR} record (land and ocean) holds the "
-            "same raw sentinel value used for ocean/invalid cells in the real years, so "
-            "it decodes to an obviously out-of-range value and fails loudly if ever read "
-            f"by mistake. Real forcing begins at DTIME index {STEPS_PER_YEAR} "
-            "(2024-01-01 00:00Z, 3-hourly, mid-interval timestamps)."
+            f"exactly. Every cell of the {DUMMY_YEAR} record holds the same raw sentinel "
+            "value used for ocean/invalid cells in the real years, EXCEPT the single "
+            f"last record (DTIME index {STEPS_PER_YEAR - 1}), which is a verbatim copy of "
+            f"{Y0}-01-01's first real packed record: the reader's day-boundary "
+            "interpolation for a cold start reads exactly that one dummy-year record "
+            "blended with the real first record, and leaving it at the sentinel pulled "
+            "the first few integration steps' TBOT/PBOT/QBOT/FLDS toward an unphysical "
+            "value. Land cells therefore carry real decoded data at that one record; "
+            "ocean cells are unaffected (already the sentinel in the real data too). "
+            f"Every other dummy-year record still decodes to an obviously out-of-range "
+            "value and fails loudly if ever read by mistake. Real forcing begins at "
+            f"DTIME index {STEPS_PER_YEAR} (2024-01-01 00:00Z, 3-hourly, mid-interval "
+            "timestamps)."
         ),
         "calendar_note": ("Source CanESM5-DBCCA-TESSFA2 data use a standard (Gregorian, "
                           "leap-year) calendar; Feb 29 was removed from every leap year "
