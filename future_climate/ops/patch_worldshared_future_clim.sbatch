@@ -44,7 +44,7 @@ BASE_DIR="/projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA
 # --sha256 doubles a full 96GiB read per file (~200s each). Kept on by
 # default: this is canonical data and the before/after hashes are the
 # audit trail. Override with EXTRA_ARGS="" to skip.
-EXTRA_ARGS="${EXTRA_ARGS:---sha256}"
+EXTRA_ARGS="${EXTRA_ARGS---sha256}"
 
 DIR="$BASE_DIR/$SCENARIO"
 [[ -d "$DIR" ]] || { echo "ERROR: $DIR is not a directory" >&2; exit 1; }

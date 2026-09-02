@@ -40,7 +40,7 @@ BASE_DIR="/projects/hpcl-cli185/proj-shared/zw5/SEUS_halfdeg/data/processed/cpl_
 
 : "${SCENARIO:?Set SCENARIO, e.g. sbatch --export=ALL,SCENARIO=ssp119,RECORD_DIR=... patch_halfdeg_future_clim.sbatch}"
 : "${RECORD_DIR:?Set RECORD_DIR for the patch-record JSON audit trail}"
-EXTRA_ARGS="${EXTRA_ARGS:---sha256}"
+EXTRA_ARGS="${EXTRA_ARGS---sha256}"
 
 DIR="$BASE_DIR/$SCENARIO"
 [[ -d "$DIR" ]] || { echo "ERROR: $DIR is not a directory" >&2; exit 1; }

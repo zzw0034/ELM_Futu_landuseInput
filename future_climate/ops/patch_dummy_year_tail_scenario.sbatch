@@ -25,7 +25,7 @@ PY=/projects/hpcl-cli185/proj-shared/zw5/conda_envs/make_surfdata_pf/bin/python
 : "${BASE_DIR:?Set BASE_DIR, e.g. /scratch/hpcl-cli185/zw5/future_clim}"
 : "${SCENARIO:?Set SCENARIO, e.g. ssp119}"
 : "${RECORD_DIR:?Set RECORD_DIR for the patch-record JSON audit trail}"
-EXTRA_ARGS="${EXTRA_ARGS:---sha256}"
+EXTRA_ARGS="${EXTRA_ARGS---sha256}"
 
 DIR="$BASE_DIR/$SCENARIO"
 VARNAMES=(TBOT PSRF QBOT FSDS PRECTmms WIND FLDS)
