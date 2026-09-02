@@ -132,6 +132,40 @@ The patch is **idempotent** (re-running finds 0 cells to change) and
 **reversible** (the pre-patch state of record 2919 was a known per-variable
 constant, so it can be restored exactly).
 
+### Completion status (2026-09-02)
+
+All 84 files — 4 scenarios x 7 variables x 3 locations — are patched.
+
+| scenario | /scratch 4 km | world-shared 4 km | 0.5° production | canonical audit |
+|---|---|---|---|---|
+| ssp119 | done | done | done | 78 PASS / 0 FAIL |
+| ssp245 | done | done | done | 78 PASS / 0 FAIL |
+| ssp370 | done | done | done | 78 PASS / 0 FAIL |
+| ssp585 | done | done | done | 78 PASS / 0 FAIL |
+
+Cells changed per file: 117,964 of 225,625 at 4 km (52.3%, matching the
+known land fraction), 571 of 1,134 at 0.5° (the land-bearing coarse cells).
+One /scratch file reports 0 — ssp119/TBOT, re-patched by the batch run after
+an earlier single-file test, which is the idempotence guarantee working.
+
+**Cross-check across locations**: every one of the 28 world-shared files has
+a post-patch sha256 **identical** to its /scratch counterpart (0 mismatches).
+Since the /scratch copies passed the full four-scenario audit independently,
+this proves the canonical files are byte-identical to audited-good data —
+complete coverage without re-reading 2.7 TB.
+
+The 0.5° files additionally passed 11 runs of the independent oracle
+verifiers (`verify_future_forcing_0p5deg.py` / `verify_future_flds_0p5deg.py`):
+full 7-variable coverage on ssp245, plus TBOT and FLDS on the other three
+scenarios. Those verifiers rebuild the mapping by brute force and compare
+with exact rational arithmetic, so they are a stronger check than comparing
+one copy against another.
+
+**Cost, for planning**: ~16-18 minutes per 96 GB file on /projects NFS with
+`--sha256`, i.e. ~2 hours per scenario, ~8 hours for all 28 canonical files.
+0.5° took 32 seconds per scenario. The gap is row count (225,625 vs 1,134),
+not file size — see the note on IOPS below.
+
 ## 5. How to verify
 
 **Data-side**, per scenario:
@@ -224,3 +258,26 @@ published monthly output.
 
 The `/scratch/hpcl-cli185/zw5/future_clim/` copy has itself been patched, so
 it is **no longer a pristine pre-fix backup**. Do not treat it as one.
+
+## 7. Why this cost so much wall time
+
+Worth recording, because the intuition is backwards: **modifying 441 KB took
+longer than writing the whole 96 GB file would have.**
+
+Record 2919 lives in every one of the 225,625 rows, and `DTIME` is the
+fastest-varying dimension, so those 2-byte values sit 455,520 bytes apart.
+Touching them means ~225,625 scattered accesses — an IOPS-bound workload —
+whereas the original build wrote the same file in ~20 large contiguous
+blocks at full bandwidth. That is also why 0.5° finished in 32 seconds per
+scenario: 1,134 rows, not 1,134-times-smaller files.
+
+Two measured consequences:
+
+- **Copying the already-patched file instead is worse, not better.**
+  /scratch → /projects ran at 27 MB/s, so 7 files (672 GB) would take ~6.9 h
+  versus ~2 h to patch them in place — and a half-finished copy leaves a
+  corrupt canonical file, where an interrupted patch is simply re-runnable.
+- **`--sha256` partly pays for itself.** It doubles a full-file read, but
+  that sequential pass warms the page cache, so the subsequent scattered
+  column work and any follow-on audit run far faster (the sha256-warmed
+  canonical audits took ~3 minutes; the cold /scratch ones took ~45).
