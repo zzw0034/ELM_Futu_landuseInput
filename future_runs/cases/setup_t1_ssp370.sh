@@ -69,20 +69,23 @@ done
 ./xmlchange MAX_MPITASKS_PER_NODE=$PPN,MAX_TASKS_PER_NODE=$PPN
 ./xmlchange RUNDIR=$OUTROOT/$CASE/run,EXEROOT=$OUTROOT/$CASE/bld
 
-say "4. bounds-checking build (construction D)"
+say "4. DEBUG on, then case.setup --reset"
+# Order matters and the first draft had it wrong: cmake_macros/ does not exist
+# until case.setup generates it, and --reset regenerates it from the machine
+# defaults anyway. So set DEBUG first, reset, and only then edit the macros.
 ./xmlchange DEBUG=TRUE
-# guide 18.1: -ffpe-trap=invalid fires inside mpi_init, long before any model code
-sed -i 's/ -ffpe-trap=invalid,zero,overflow//' cmake_macros/gnu.cmake
-grep -n 'FLAGS_DEBUG' cmake_macros/gnu.cmake
-
-say "5. case.setup --reset  (wipes cmake_macros; -DCPL_BYPASS goes back after)"
 ./case.setup --reset
+
+say "5. re-apply both macro edits that --reset just discarded"
+# guide 9: create_newcase/case.setup never add this, and without it the build
+# succeeds and produces a non-CPL_BYPASS binary
 grep -q 'DCPL_BYPASS' cmake_macros/universal.cmake \
   || echo 'string(APPEND CPPDEFS " -DCPL_BYPASS")' >> cmake_macros/universal.cmake
 grep -n CPPDEFS cmake_macros/universal.cmake
-# --reset re-renders gnu.cmake too
+# guide 18.1: -ffpe-trap=invalid fires inside mpi_init, long before model code
 sed -i 's/ -ffpe-trap=invalid,zero,overflow//' cmake_macros/gnu.cmake
-grep -c 'ffpe-trap' cmake_macros/gnu.cmake | xargs -I{} echo "ffpe-trap occurrences remaining: {}"
+grep -n 'FLAGS_DEBUG' cmake_macros/gnu.cmake
+echo "ffpe-trap occurrences remaining: $(grep -c 'ffpe-trap' cmake_macros/gnu.cmake || true)"
 
 say "6. diagnostic SourceMods, generated from the pinned commit"
 mkdir -p SourceMods/src.elm
