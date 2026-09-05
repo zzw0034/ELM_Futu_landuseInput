@@ -78,7 +78,73 @@ release 构建同样 ENDRUN。
 - 七个正式长作业中 6 个直接受阻。
 - 生产 511164（历史）不受影响，其 landuse 通过检查。
 
-## 待决
+## 根因定位（2026-09-05）
 
-修复归属在 `ELM_Futu_landuseInput` 的 landuse 生成侧，不在运行侧。
-按指示不自行重做输入数据，等指示。
+`scripts/02_harmonize_seus.py`，`build_landuse_timeseries()`（`--build-timeseries`
+生产入口）。归一化本身是对的，**错在归一化之后被降精度存了一遍**：
+
+```python
+442:  comp = np.zeros((nyr, NPFT, ny, nx), dtype=np.float32)      # ← 容器是 float32
+...
+452:      ci = np.where(s > 0, 100.0 * p_harm[i] / np.where(s > 0, s, 1.0)[None], 0.0)
+                                                              # ↑ float64，精确归一到 100
+456:      comp[i] = ci.astype(np.float32)                       # ← 精度在这里丢掉
+...
+462:  pft_out = comp[1:]
+...
+556:  pft_out.astype(np.float64)   # 注释写的是 "match the target dtype exactly"
+                                   # 只修 dtype，修不回已经丢掉的位
+```
+
+17 个分量各自舍入到 float32 后，其和不再精确等于 100，而是 100 ± 6e-6
+（相对 6e-8），与实测的 5.55e-08 完全对得上。第 556 行那个 `astype(np.float64)`
+把它洗成了一个"看起来是双精度"的数——所以 `ncdump` 显示 `double`，
+但数值只有单精度的信息量。这也是为什么"检查 dtype"这一关没能发现问题。
+
+### 为什么各条 QA 都没拦住
+
+| 检查 | 阈值 | 为什么漏掉 |
+|---|---|---|
+| `02_harmonize_seus.py:508` 的 sum-to-100 | **没有阈值** | 只是 `print(f"...{...:.4f}")`。真实误差 5.5e-06（百分数单位）在 4 位小数下打印成 `0.0000` |
+| `FUTURE_LANDUSE_TIMESERIES.md` §6 验证表 | 抄的上面那行 | 记录成 "max\|sum−100\| = **0.0000**"，看起来是完美通过 |
+| `build_harvest_scenarios.py:187` 的 gate | `err.max() > 1e-3` | 比 ELM 的 1e-14 松 11 个数量级 |
+| dtype 一致性检查 | 比较声明类型 | 声明确实是 `double`，一致 |
+
+四道关都是"看起来通过"，没有一道对着 ELM 的真实判据 `1e-14`。
+
+### 为什么 RF 干净、DF/RH 不干净
+
+`build_harvest_scenarios.py` 里 RF 自己在 float64 下从 2023 anchor 重算
+`rf_pft`，没走过 float32；DF/RH 则是
+`default_pft = np.array(ds["PCT_NAT_PFT"][:])` 直接从 Default 成品里读，
+把缺陷一起继承了。
+
+## 修复方案（未执行）
+
+改两行，`02_harmonize_seus.py`：
+
+```python
+442:  comp = np.zeros((nyr, NPFT, ny, nx), dtype=np.float64)
+456:      comp[i] = ci
+```
+
+`ci` 已经在 float64 里精确归一，保留即可。实测旁证：历史文件、0.5° future、
+RF 三者都是 float64 路径，实测偏差 6.66e-16，比 ELM 的 1e-14 低两个数量级，
+**说明纯 float64 归一化足够，不需要额外的强制配平**。
+
+内存代价：`comp` 从 875 MB 变 1.75 GB，作业是
+`submit_landuse_future_array.sbatch`（`--mem=64g`，`-t 00:40:00`），余量充足。
+
+同时应该修的（否则下次还是拦不住）：
+
+1. `02_harmonize_seus.py:508` 的打印改成对着 `1e-14` 的**断言**，不是 `:.4f` 打印。
+2. `build_harvest_scenarios.py:187` 的 `1e-3` 收紧到 ELM 判据。
+3. `FUTURE_LANDUSE_TIMESERIES.md` §6 的验证表重记（当前那个 `0.0000` 是假通过）。
+
+## 重建范围
+
+需要重跑 `02_harmonize_seus.py --build-timeseries` 的 4 个 SSP（array job，
+4 个 task 并行，每个 40 分钟内），然后由它们派生的 DF、RH 重建；
+**RF 不需要动**。合计 6 个文件。
+
+按指示，定位与方案到此为止，未修改脚本、未重做任何数据。
