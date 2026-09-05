@@ -334,10 +334,17 @@ def downscale_harvest(scenario, latc, lonc, tree_comp_pct, natveg_pct, out_years
 # static column (option A). This is stage A: the composition on the target grid.
 # ============================================================================
 
+# smoothHARV is the production historical source (the 4km transient runs on it).
+# Repointed 2026-09-05 from the pre-smoothHARV file, which was the same latent
+# trap the 0.5deg code review found. Verified harmless to switch: every variable
+# this script reads from the anchor -- all 15 STATIC_VARS, PCT_NAT_PFT@2023,
+# GRAZING@2023, YEAR -- is bit-identical between the two (job 511824). They
+# differ only in HARVEST_SH1 and HARVEST_VH1, which this script does not read
+# from the anchor; future harvest comes from the LUH2 downscale.
 TARGET_DEFAULT = (
     "/projects/hpcl-cli185/proj-shared/zw5/ELM_makeSurfdata/"
     "Make_surface_data/surfdata_results/"
-    "landuse.timeseries_SEUS_1_24deg_nlcd2elm_simyr1850-2023_c260723.nc"
+    "landuse.timeseries_SEUS_1_24deg_nlcd2elm_smoothHARV_simyr1850-2023_c260723.nc"
 )
 
 
@@ -440,7 +447,14 @@ def build_landuse_timeseries(args):
     # recover composition; force 100% bare where target natveg==0 or Σ==0
     natveg_zero = natveg_a == 0.0
     nyr = p_harm.shape[0]
-    comp = np.zeros((nyr, NPFT, ny, nx), dtype=np.float32)
+    # float64, NOT float32. ci below is normalized in float64 so that it closes
+    # on 100 exactly; rounding the 17 components to float32 and casting back
+    # (which stage C does, "to match the target dtype") leaves a double that
+    # carries only single-precision information, and the sum lands at
+    # 100 +/- 6e-6. ELM's check_sums_equal_1_3d uses eps = 1e-14, i.e. exact
+    # double equality, and ENDRUNs on the first record. That is what killed the
+    # first 4km future run; see future_runs/docs/BLOCKER_pct_nat_pft_sum.md.
+    comp = np.zeros((nyr, NPFT, ny, nx), dtype=np.float64)
     # Annual harmonized natveg = Sum_j p(j), i.e. the natveg implied by the marched
     # p(j) field (anchored at the target's 2023 natveg, carrying the Chen trend).
     # Same quantity the standalone SEUS mode writes as PCT_NATVEG. Used by stage B
@@ -453,7 +467,7 @@ def build_landuse_timeseries(args):
         fill = natveg_zero | (s <= 1e-9)
         ci[:, fill] = 0.0
         ci[0, fill] = 100.0  # PFT0 (bare) = 100
-        comp[i] = ci.astype(np.float32)
+        comp[i] = ci
         nvi = np.clip(s, 0.0, 100.0)
         nvi[fill] = 0.0
         natveg_dyn[i] = nvi
@@ -505,11 +519,24 @@ def build_landuse_timeseries(args):
 
     # ---- validation ----
     print(f"[timeseries stageA] scenario {args.scenario}  grid {ny}x{nx}")
+    # Assert against ELM's own criterion, do not merely print it. This line used
+    # to be a bare print with :.4f, so the real 5.5e-06 error formatted as
+    # "0.0000" and was copied into the validation table as a pass while every
+    # delivered file was unusable. ELM applies eps = 1e-14 to sum/100 - 1
+    # (surfrdUtilsMod.F90 check_sums_equal_1_3d), so the budget here is 1e-12 in
+    # percent units; the float64 path measures ~7e-14, two orders inside it.
     ss = pft_out.sum(axis=1)
+    _dev = float(np.abs(ss - 100.0).max())
     print(
-        f"  sum-to-100: max|sum-100| = {float(np.abs(ss - 100.0).max()):.4f}  "
-        f"(min {ss.min():.3f} max {ss.max():.3f})"
+        f"  sum-to-100: max|sum-100| = {_dev:.6e}  "
+        f"(min {ss.min():.6f} max {ss.max():.6f})  [ELM budget 1e-12]"
     )
+    if _dev > 1e-12:
+        raise SystemExit(
+            f"PCT_NAT_PFT sum-to-100 max|sum-100| = {_dev:.6e} exceeds 1e-12. "
+            f"ELM's check_sums_equal_1_3d uses eps=1e-14 on sum/100-1 and will "
+            f"ENDRUN on the first record. Refusing to write this file."
+        )
     m_veg = natveg_a > 0
     d23 = float(np.abs(comp[0][:, m_veg] - natpft23[:, m_veg].astype(np.float32)).max())
     n_anom = int((natveg_zero & (natpft23[0] < 99.9)).sum())

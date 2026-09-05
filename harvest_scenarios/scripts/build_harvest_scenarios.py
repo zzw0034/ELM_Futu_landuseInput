@@ -183,8 +183,16 @@ def clone_structure(src_path, out_path, overrides, global_note, natveg_mask=None
             if natveg_mask is not None and "PCT_NAT_PFT" in chk.variables:
                 s = np.array(chk["PCT_NAT_PFT"][:]).sum(axis=1)
                 err = np.abs(s[np.broadcast_to(natveg_mask[None, :, :], s.shape)] - 100.0)
-                if err.size and err.max() > 1e-3:
-                    raise ValueError(f"PCT_NAT_PFT sum-to-100 max|err|={err.max():.6g} over natveg>0")
+                # 1e-12 in percent units, i.e. ELM's own eps = 1e-14 applied to
+                # sum/100 - 1 (surfrdUtilsMod.F90 check_sums_equal_1_3d). The
+                # previous 1e-3 was eleven orders looser and passed six files
+                # that ELM ENDRUNs on at the first record; DF and RH inherit
+                # PCT_NAT_PFT from Default, so this gate is their only guard.
+                if err.size and err.max() > 1e-12:
+                    raise ValueError(
+                        f"PCT_NAT_PFT sum-to-100 max|err|={err.max():.6g} over natveg>0 "
+                        f"exceeds 1e-12; ELM will ENDRUN on the first record"
+                    )
     except Exception:
         # Leave the tmp file for post-mortem; just never promote it.
         raise
