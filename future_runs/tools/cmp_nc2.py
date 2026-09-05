@@ -38,6 +38,20 @@ def _fmt(v):
     return s if len(s) <= 90 else s[:87] + "..."
 
 
+def as_f8(var):
+    """Read a variable as float64 with masked points as NaN.
+
+    Cast to f8 BEFORE filling: np.ma.filled(int_array, np.nan) raises, because
+    NaN is not representable in an integer dtype. cmp_nc.py hid this inside a
+    bare except and silently dropped every masked integer variable from the
+    comparison; dropping them is exactly what a consistency test must not do.
+    """
+    a = var[:]
+    if np.ma.isMaskedArray(a):
+        return np.ma.filled(a.astype("f8"), np.nan)
+    return np.asarray(a, dtype="f8")
+
+
 def record_keys(ds):
     """Per-record identity: (mcdate, mcsec) if present, else time, else None."""
     v = ds.variables
@@ -93,6 +107,8 @@ def main():
     p.add_argument("--max-report", type=int, default=40)
     p.add_argument("--quiet-attrs", action="store_true",
                    help="count attribute differences but do not list them")
+    p.add_argument("--drill", action="append", default=[],
+                   help="variable to break down per record; repeatable")
     args = p.parse_args()
 
     da, db = netCDF4.Dataset(args.a), netCDF4.Dataset(args.b)
@@ -129,8 +145,8 @@ def main():
             continue
 
         # --- DATA ---
-        A = np.ma.filled(xa[:], np.nan).astype("f8")
-        B = np.ma.filled(xb[:], np.nan).astype("f8")
+        A = as_f8(xa)
+        B = as_f8(xb)
 
         if A.shape != B.shape:
             if rec_dim and xa.dimensions and xa.dimensions[0] == rec_dim:
@@ -197,6 +213,37 @@ def main():
             print("%-28s %-24s %-40s %s" % (where[:28], k[:24], x[:40], y[:60]))
         if len(attrs) > args.max_report:
             print("... %d more" % (len(attrs) - args.max_report))
+
+    for name in args.drill:
+        if name not in common:
+            print("\nDRILL %s: not present in both files" % name)
+            continue
+        A, B = as_f8(da.variables[name]), as_f8(db.variables[name])
+        al = align(da, db, name) if A.shape != B.shape else None
+        if al:
+            A, B = A[al[0]], B[al[1]]
+        if A.shape != B.shape:
+            print("\nDRILL %s: shapes %s vs %s, cannot align" % (name, A.shape, B.shape))
+            continue
+        keys = record_keys(da) or []
+        if al:
+            keys = [keys[i] for i in al[0]]
+        print("\nDRILL %s  shape=%s" % (name, A.shape))
+        print("%-16s %10s %14s %14s %14s %14s"
+              % ("record", "n differ", "max|A-B|", "A at max", "B at max", "A sum"))
+        for r in range(A.shape[0]):
+            a, b = A[r], B[r]
+            both_nan = np.isnan(a) & np.isnan(b)
+            with np.errstate(invalid="ignore"):
+                d = np.where(both_nan, 0.0, np.abs(a - b))
+            d = np.where(np.isnan(d), np.inf, d)
+            n = int(np.count_nonzero(d > 0))
+            j = int(np.argmax(d)) if d.size else 0
+            lab = str(keys[r][1]) if r < len(keys) else str(r)
+            print("%-16s %10d %14.6g %14.6g %14.6g %14.6g"
+                  % (lab, n, float(d.max()) if d.size else 0.0,
+                     float(np.ravel(a)[j]), float(np.ravel(b)[j]),
+                     float(np.nansum(a))))
 
     ok = not data_diff and not text_diff
     print()
