@@ -13,9 +13,34 @@ The diagnostic answers, for one gridcell, what the reader actually did:
   DIAG_PRE     the per-timestep index pair BEFORE the end-of-record guard
   DIAG_POST    the same pair AFTER the guard, so whether the guard fired is
                recorded rather than inferred from control flow
-  DIAG_USE     what was actually read and used: raw packed shorts at both
-               indices, scale_factor/add_offset, both decoded endpoints,
-               the interpolation weights, and the blended value
+  DIAG_READ    the two read endpoints: index, raw packed short and decoded
+               value at each of t1 and t2
+  DIAG_INTP    the interpolation intermediates: weights, the blended value,
+               and the per-month var_mult/var_offset that will be applied
+  DIAG_FORC    the actual forcing handed to ELM (state)
+  DIAG_FLUX    the actual forcing handed to ELM (fluxes)
+
+Why DIAG_READ/DIAG_INTP/DIAG_FORC are three blocks and not one
+--------------------------------------------------------------
+An earlier draft printed the blend and labelled it "used".  That is wrong for
+most of the seven variables, so it would have made a wrong end-point verdict
+look verified:
+
+  * forc_t / forc_th / forc_pbot / forc_q apply var_mult(v,g,mon) and
+    var_offset(v,g,mon) to the blend and then clamp -- min(...,323) for T,
+    max(...) for pbot and q.
+  * FSDS is not interpolated between two endpoints at all.  Only tindex(4,2)
+    is read, scaled by wt2(4) (which the cosz branch overwrites), then split
+    into forc_solad/forc_solai by the ratio_rvrf polynomial.
+  * PRECTmms is not interpolated either -- the source says so outright
+    ("Don't interpolate rainfall data") -- and is then split into
+    rainc/rainl/snowc/snowl by a temperature ramp and a 0.1/0.9 split.
+  * forc_lwrad can be discarded entirely and recomputed as ea*STEBOL*tbot**4.
+
+So the blend equals the forcing for none of FSDS, PRECTmms, FLDS and only
+up to var_mult/var_offset/clamping for the rest.  Reading the endpoints back
+against the input file needs DIAG_READ; judging what the model actually ran
+on needs DIAG_FORC/DIAG_FLUX; the step between them is DIAG_INTP.
 
 Gating (this is the part that the first draft got wrong)
 -------------------------------------------------------
@@ -50,7 +75,10 @@ PRE_ANCHOR = "            if (const_climate_hist .or. yr .le. atm2lnd_vars%start
 
 POST_ANCHOR = """            !if (yr .gt. atm2lnd_vars%startyear_met) then """
 
-USE_ANCHOR = "        !Air temperature"
+READ_ANCHOR = "        !Air temperature"
+
+FORC_ANCHOR = ("  !------------------------------------Fire data "
+               "-------------------------------------------------------")
 
 
 def decl_block(first_n, windows):
@@ -60,6 +88,7 @@ def decl_block(first_n, windows):
     integer, save :: diag_ncall = 0
     integer :: diag_ymd, diag_iw
     logical :: diag_on
+    real(r8) :: diag_d1, diag_d2
     integer, parameter :: DIAG_FIRST_N = {first_n}
     integer, parameter :: DIAG_NWIN = {nwin}
     integer, parameter :: DIAG_WIN_LO(DIAG_NWIN) = (/ {lo} /)
@@ -122,28 +151,61 @@ POST_BLOCK = """            ! --- forcing diagnostic: index pair AFTER the guard
             ! --- end forcing diagnostic ---
 """
 
-USE_BLOCK = """        ! --- forcing diagnostic: what was actually read and used ---
+READ_BLOCK = """        ! --- forcing diagnostic: read endpoints, then interpolation intermediates ---
+        ! Neither of these is the forcing ELM runs on; see DIAG_FORC/DIAG_FLUX.
         if (diag_on) then
-          write(iulog,'(a,i6,a,i8,a,i8,a,i8)') &
-            'DIAG_CELL call=', diag_ncall, ' g=', g, ' begg=', bounds%begg, ' endg=', bounds%endg
+          write(iulog,'(a,i6,a,i8,a,i8,a,i8,a,i9,a,i6)') &
+            'DIAG_CELL call=', diag_ncall, ' g=', g, ' begg=', bounds%begg, &
+            ' endg=', bounds%endg, ' ymd=', yr*10000+mon*100+day, ' tod_h=', tod/3600
           do diag_iw = 1, met_nvars
-            write(iulog,'(a,i6,a,i3,1x,a8,a,i10,a,i10,a,i8,a,i8,a,es14.7,a,es14.7,a,es16.9,a,es16.9,a,f8.5,a,f8.5,a,es16.9)') &
-              'DIAG_USE  call=', diag_ncall, ' v=', diag_iw, trim(metvars(diag_iw)), &
-              ' t1=', tindex(diag_iw,1), ' t2=', tindex(diag_iw,2), &
+            diag_d1 = atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,1))* &
+                      atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw)
+            diag_d2 = atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2))* &
+                      atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw)
+            write(iulog,'(a,i6,a,i3,1x,a8,a,i10,a,i8,a,es16.9,a,i10,a,i8,a,es16.9)') &
+              'DIAG_READ call=', diag_ncall, ' v=', diag_iw, trim(metvars(diag_iw)), &
+              ' t1=', tindex(diag_iw,1), &
               ' raw1=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,1)), &
+              ' dec1=', diag_d1, &
+              ' t2=', tindex(diag_iw,2), &
               ' raw2=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2)), &
-              ' scale=', atm2lnd_vars%scale_factors(diag_iw), &
-              ' offset=', atm2lnd_vars%add_offsets(diag_iw), &
-              ' dec1=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,1))* &
-                        atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw), &
-              ' dec2=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2))* &
-                        atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw), &
+              ' dec2=', diag_d2
+            write(iulog,'(a,i6,a,i3,1x,a8,a,f9.6,a,f9.6,a,es16.9,a,es13.6,a,es13.6,a,es14.7,a,es14.7)') &
+              'DIAG_INTP call=', diag_ncall, ' v=', diag_iw, trim(metvars(diag_iw)), &
               ' wt1=', wt1(diag_iw), ' wt2=', wt2(diag_iw), &
-              ' used=', (atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,1))* &
-                         atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw))*wt1(diag_iw) + &
-                        (atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2))* &
-                         atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw))*wt2(diag_iw)
+              ' blend=', diag_d1*wt1(diag_iw) + diag_d2*wt2(diag_iw), &
+              ' vmult=', atm2lnd_vars%var_mult(diag_iw,g,mon), &
+              ' voff=', atm2lnd_vars%var_offset(diag_iw,g,mon), &
+              ' scale=', atm2lnd_vars%scale_factors(diag_iw), &
+              ' offset=', atm2lnd_vars%add_offsets(diag_iw)
           end do
+        end if
+        ! --- end forcing diagnostic ---
+
+"""
+
+FORC_BLOCK = """        ! --- forcing diagnostic: the values ELM actually runs on ---
+        ! Placed after every forc_* assignment in this gridcell iteration and
+        ! before the fire-data section.  forc_rain*/forc_snow* are still the
+        ! locals here; they are summed into forc_rain_not_downscaled_grc later.
+        if (diag_on) then
+          write(iulog,'(a,i6,a,i8,a,es16.9,a,es16.9,a,es16.9,a,es16.9,a,es16.9)') &
+            'DIAG_FORC call=', diag_ncall, ' g=', g, &
+            ' T=', atm2lnd_vars%forc_t_not_downscaled_grc(g), &
+            ' TH=', atm2lnd_vars%forc_th_not_downscaled_grc(g), &
+            ' PBOT=', atm2lnd_vars%forc_pbot_not_downscaled_grc(g), &
+            ' Q=', atm2lnd_vars%forc_q_not_downscaled_grc(g), &
+            ' LWD=', atm2lnd_vars%forc_lwrad_not_downscaled_grc(g)
+          write(iulog,'(a,i6,11(a,es16.9))') &
+            'DIAG_FLUX call=', diag_ncall, &
+            ' SOLAD1=', atm2lnd_vars%forc_solad_grc(g,1), &
+            ' SOLAD2=', atm2lnd_vars%forc_solad_grc(g,2), &
+            ' SOLAI1=', atm2lnd_vars%forc_solai_grc(g,1), &
+            ' SOLAI2=', atm2lnd_vars%forc_solai_grc(g,2), &
+            ' RAINC=', forc_rainc, ' RAINL=', forc_rainl, &
+            ' SNOWC=', forc_snowc, ' SNOWL=', forc_snowl, &
+            ' U=', atm2lnd_vars%forc_u_grc(g), ' V=', atm2lnd_vars%forc_v_grc(g), &
+            ' HGT=', atm2lnd_vars%forc_hgt_grc(g)
         end if
         ! --- end forcing diagnostic ---
 
@@ -188,7 +250,8 @@ def main():
     lines = insert_before(lines, INIT_ANCHOR, GATE_BLOCK + INIT_BLOCK, "INIT")
     lines = insert_before(lines, PRE_ANCHOR, GATE_BLOCK + PRE_BLOCK, "PRE")
     lines = insert_before(lines, POST_ANCHOR, POST_BLOCK, "POST")
-    lines = insert_before(lines, USE_ANCHOR, USE_BLOCK, "USE")
+    lines = insert_before(lines, READ_ANCHOR, READ_BLOCK, "READ")
+    lines = insert_before(lines, FORC_ANCHOR, FORC_BLOCK, "FORC")
 
     with open(a.out, "w") as f:
         f.writelines(lines)
