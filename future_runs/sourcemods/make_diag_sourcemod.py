@@ -59,6 +59,15 @@ Two independent gates, OR'd, neither keyed on the index value:
 Volume: masterproc and g == bounds%begg only, 4 blocks x 7 variables per
 recorded call.  A 24-call window is a few hundred lines.
 
+Only DIAG_INIT names the variable.  metvars is assigned inside the
+loaded_bypassdata == 0 load branch and is an uninitialised local everywhere
+else, so printing it from the per-timestep path emitted garbage that sometimes
+truncated the line (seen in T1, job 511835, from call 2 onward).  DIAG_INIT
+runs in the same call as the load, so its names are valid and serve as the
+v -> name legend at the top of each process's log; every other block prints
+v= only.  The mapping for metsource 6 is
+1 TBOT, 2 PSRF, 3 QBOT, 4 FSDS, 5 PRECTmms, 6 WIND, 7 FLDS.
+
 Usage:
     make_diag_sourcemod.py --src <lnd_import_export.F90 from pinned commit> \
                            --out <CASEROOT>/SourceMods/src.elm/lnd_import_export.F90 \
@@ -133,8 +142,8 @@ INIT_BLOCK = """            ! --- forcing diagnostic ---
 
 PRE_BLOCK = """            ! --- forcing diagnostic: index pair BEFORE the guard ---
             if (diag_on) then
-              write(iulog,'(a,i6,a,i3,1x,a8,a,i9,a,i6,a,i10,a,i10)') &
-                'DIAG_PRE  call=', diag_ncall, ' v=', v, trim(metvars(v)), &
+              write(iulog,'(a,i6,a,i3,a,i9,a,i6,a,i10,a,i10)') &
+                'DIAG_PRE  call=', diag_ncall, ' v=', v, &
                 ' ymd=', yr*10000+mon*100+day, ' tod_h=', tod/3600, &
                 ' t1=', atm2lnd_vars%tindex(g,v,1), ' t2=', atm2lnd_vars%tindex(g,v,2)
             end if
@@ -143,8 +152,8 @@ PRE_BLOCK = """            ! --- forcing diagnostic: index pair BEFORE the guard
 
 POST_BLOCK = """            ! --- forcing diagnostic: index pair AFTER the guard ---
             if (diag_on) then
-              write(iulog,'(a,i6,a,i3,1x,a8,a,i10,a,i10,a,i10)') &
-                'DIAG_POST call=', diag_ncall, ' v=', v, trim(metvars(v)), &
+              write(iulog,'(a,i6,a,i3,a,i10,a,i10,a,i10)') &
+                'DIAG_POST call=', diag_ncall, ' v=', v, &
                 ' t1=', atm2lnd_vars%tindex(g,v,1), ' t2=', atm2lnd_vars%tindex(g,v,2), &
                 ' timelen=', atm2lnd_vars%timelen(v)
             end if
@@ -162,16 +171,16 @@ READ_BLOCK = """        ! --- forcing diagnostic: read endpoints, then interpola
                       atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw)
             diag_d2 = atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2))* &
                       atm2lnd_vars%scale_factors(diag_iw)+atm2lnd_vars%add_offsets(diag_iw)
-            write(iulog,'(a,i6,a,i3,1x,a8,a,i10,a,i8,a,es16.9,a,i10,a,i8,a,es16.9)') &
-              'DIAG_READ call=', diag_ncall, ' v=', diag_iw, trim(metvars(diag_iw)), &
+            write(iulog,'(a,i6,a,i3,a,i10,a,i8,a,es16.9,a,i10,a,i8,a,es16.9)') &
+              'DIAG_READ call=', diag_ncall, ' v=', diag_iw, &
               ' t1=', tindex(diag_iw,1), &
               ' raw1=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,1)), &
               ' dec1=', diag_d1, &
               ' t2=', tindex(diag_iw,2), &
               ' raw2=', atm2lnd_vars%atm_input(diag_iw,g,1,tindex(diag_iw,2)), &
               ' dec2=', diag_d2
-            write(iulog,'(a,i6,a,i3,1x,a8,a,f9.6,a,f9.6,a,es16.9,a,es13.6,a,es13.6,a,es14.7,a,es14.7)') &
-              'DIAG_INTP call=', diag_ncall, ' v=', diag_iw, trim(metvars(diag_iw)), &
+            write(iulog,'(a,i6,a,i3,a,f9.6,a,f9.6,a,es16.9,a,es13.6,a,es13.6,a,es14.7,a,es14.7)') &
+              'DIAG_INTP call=', diag_ncall, ' v=', diag_iw, &
               ' wt1=', wt1(diag_iw), ' wt2=', wt2(diag_iw), &
               ' blend=', diag_d1*wt1(diag_iw) + diag_d2*wt2(diag_iw), &
               ' vmult=', atm2lnd_vars%var_mult(diag_iw,g,mon), &
