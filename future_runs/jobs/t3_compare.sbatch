@@ -46,16 +46,20 @@ echo "############ 2. 2025 history, aligned on the time coordinate ############"
 # January 2025 is the 12th record of the 2024-02-01 file; Feb-Dec 2025 are in
 # the 2025-02-01 file. Both files exist on both sides, and cmp_nc2 aligns on
 # mcdate/mcsec, so a differing record count cannot hide the comparison.
+# The 2024-02-01 tapes were staged into B under A's case name, because elm.r's
+# locfnh names them and ELM reopens them to append January 2025. So in B's run
+# directory they are still called <A>.elm.h0.2024-02-01, not <B>.*. Comparing
+# by B's name would silently find nothing and report "not present".
+BDIR=$(dirname $B)
 for tape in h0 h1; do
-  for stamp in 2024-02-01 2025-02-01; do
-    if [[ -f $A.elm.$tape.$stamp-00000.nc && -f $B.elm.$tape.$stamp-00000.nc ]]; then
-      echo
-      echo "================ elm.$tape $stamp ================"
-      $PY $T/cmp_nc2.py $A.elm.$tape.$stamp-00000.nc $B.elm.$tape.$stamp-00000.nc --max-report 30
-    else
-      echo "  elm.$tape $stamp: not present on both sides"
-    fi
-  done
+  echo
+  echo "================ elm.$tape 2024-02-01  (holds Feb 2024 - Jan 2025; B appended Jan 2025) ================"
+  $PY $T/cmp_nc2.py $A.elm.$tape.2024-02-01-00000.nc \
+                    $BDIR/$AN.elm.$tape.2024-02-01-00000.nc --max-report 30
+  echo
+  echo "================ elm.$tape 2025-02-01  (Feb 2025 - Jan 2026) ================"
+  $PY $T/cmp_nc2.py $A.elm.$tape.2025-02-01-00000.nc \
+                    $B.elm.$tape.2025-02-01-00000.nc --max-report 30
 done
 
 echo
