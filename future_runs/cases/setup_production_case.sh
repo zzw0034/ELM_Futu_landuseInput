@@ -141,6 +141,19 @@ for pair in "RUN_TYPE|startup" "RUN_STARTDATE|2024-01-01" "CONTINUE_RUN|FALSE" \
 done
 echo "xml settings verified (13 checks)"
 
+# PIO_TYPENAME is a per-component list, so it needs its own check rather than
+# a string equality against one value. Every component must be netcdf: that is
+# what T4 measured throughput and memory on, and pnetcdf was explicitly skipped,
+# so a case that silently came up with a different backend would not be the
+# configuration that was validated.
+PIO=$(./xmlquery PIO_TYPENAME --value 2>/dev/null | tail -1)
+NNC=$(grep -o 'netcdf' <<<"$PIO" | wc -l)
+NCOMP=$(grep -o ':' <<<"$PIO" | wc -l)
+[[ "$NCOMP" -ge 8 && "$NNC" -eq "$NCOMP" ]] \
+  || die "PIO_TYPENAME is '$PIO' -- every component must be netcdf"
+grep -q 'pnetcdf' <<<"$PIO" && die "PIO_TYPENAME contains pnetcdf: '$PIO'"
+echo "PIO_TYPENAME: all $NCOMP components netcdf"
+
 NSM=$(ls SourceMods/src.elm/ | grep -cv README || true)
 [[ "$NSM" -eq 0 ]] || die "$NSM SourceMods override(s) present -- production must have none"
 echo "SourceMods overrides: 0"
