@@ -51,7 +51,7 @@ T1/T1b/T1c 的构建**不能用于本测量**，三处全部撤销：
 （当前 65 台 idle BL ≥200g），3 并发可行，7 并发（140 台）不可行——
 这也是七个正式 run 要按 **3 + 3 + 1** 分批的原因。
 
-Slurm 身份两边相同：
+Slurm 身份：
 
 ```
 -p parallel  -A hpcl-cli185  -q hpcl-cli185  --mem=200g  --constraint=BL  --exclude=blc051,blc052
@@ -63,9 +63,7 @@ Slurm 身份两边相同：
 **保留作为它们恢复后的防护**。65 台 idle 且可分配内存 ≥200g，两布局共 30 节点
 供给充足。
 
-## 3. 共同模拟区间与初始场
-
-两边完全相同，只有 `NTASKS` 不同：
+## 3. 模拟区间与初始场
 
 - `finidat` = **A3 的 2024-01-01 初始场**
   （sha256 `20e9c29b13b519ef6085b11167cf0e4eaa02e21d65ce8d55923ef6fbf16f12ad`，已验收）
@@ -93,8 +91,8 @@ hist_fincl2        = 从生产 case 逐字复制
 
 T1 的 `hist_empty_htapes` / `hist_fincl1` 被删除。
 
-**存储**：按实测 18.82 GB/模式年（h0 11.36 + h1 7.46），
-2 年 × 2 布局 ≈ **75 GB**，加 4 套 restart ≈ 55 GB，合计 **约 130 GB**。
+**存储**（单布局）：按实测 18.82 GB/模式年（h0 11.36 + h1 7.46），
+2 年 ≈ **38 GB**，加 2 套 restart（各 ~13.8 GB）≈ 28 GB，合计 **约 65 GB**。
 
 ## 5. 内存采样 —— 在 allocation 内部，持续记录
 
@@ -136,19 +134,19 @@ node-hours（指南 §16）。
 ## 7. `sbatch --test-only` 结果（2026-09-08 03:50，已实跑）
 
 ```
-20 节点: sbatch --test-only --time 03:00:00 -p parallel -A hpcl-cli185 \
-         -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052 \
-         -N 20 -n 2560 -c 1
+sbatch --test-only --time 03:00:00 -p parallel -A hpcl-cli185 \
+       -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052 \
+       -N 20 -n 2560 -c 1
   → Job 516281 to start at 2026-09-08T10:24:03 using 2560 processors
     on nodes blc[081-100] in partition parallel
-
-10 节点: 同上，--time 06:00:00 -N 10 -n 1280 -c 1
-  → Job 516282 to start at 2026-09-08T10:24:03 using 1280 processors
-    on nodes blc[129-138] in partition parallel
 ```
 
-两者均通过 QoS、内存档位与 `BL` 特征约束。**注意**："to start at 10:24" 是
-Slurm 当时的排程估计，不是保证；实际起跑时间以提交后为准。
+通过 QoS、内存档位与 `BL` 特征约束。**注意**："to start at 10:24" 是 Slurm
+当时的排程估计，不是保证——实际提交（job 516284）立即起跑，同样落在
+`blc[081-100]`。
+
+（当时也对 10 节点做过一次 `--test-only`，job 516282 → `blc[129-138]`；
+10 节点对照随后取消，结果不再适用。）
 
 首次尝试因缺 `-n` 被拒（`Task count undefined`），与 AGENTS.md 记的
 "缺 `-q`/`-n`/`-c`/`--mem` 会被拒" 一致；CIME 自己生成的作业脚本在
@@ -156,7 +154,7 @@ Slurm 当时的排程估计，不是保证；实际起跑时间以提交后为�
 
 ## 8. 预计提交命令
 
-`preview_run` 的 `SUBMIT CMD` 应为（两边只有 walltime 不同）：
+`preview_run` 的 `SUBMIT CMD`：
 
 ```
 sbatch --time 03:00:00 -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g \
@@ -164,16 +162,29 @@ sbatch --time 03:00:00 -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g \
   /projects/hpcl-cli185/proj-shared/zw5/e3sm_cases/20260908_seus_4km_fut_t4_n20/.case.run --resubmit
 ```
 
-执行顺序：
+执行顺序（**已于 2026-09-08 执行完毕**）：
 
 ```
-1  cases/setup_t4_calibration.sh     建 n20、删 SourceMods、DEBUG=FALSE、生产 history、提交构建作业
-2  等构建完成，核对 CPL_BYPASS 与 exe md5
-3  cases/setup_t4_n10.sh             --keepexe 克隆出 n10、改 RUNDIR、case.setup、恢复设置
-4  两边各 ./case.submit
+1  cases/setup_t4_calibration.sh   建 case、删 SourceMods、DEBUG=FALSE、生产 history、提交构建作业
+2  等构建完成，核对 CPL_BYPASS、exe md5 与源码身份
+3  ./case.submit                   ← 独立动作
 ```
 
-**脚本本身不提交任何模型作业**（只提交构建作业），第 4 步是独立动作。
+**脚本本身不提交模型作业**（只提交构建作业）。
+
+实际结果：构建 job 516283（`COMPLETED 0:0`，2:26），
+模型 job **516284**，20 节点 `blc[081-100]`。
+
+### 采样文件位置的一个例外
+
+`t4_prerun.sh` 后来改成向 case 查询 `RUNDIR`，但**这只对之后的作业生效**。
+已经启动的 **516284 的采样文件仍在 CASEROOT**：
+
+```
+/projects/hpcl-cli185/proj-shared/zw5/e3sm_cases/20260908_seus_4km_fut_t4_n20/mem_samples.516284.txt
+```
+
+数据有效，且位于持久项目盘，不影响验收。
 
 ## 9. 验收判据（跑完之后）
 
