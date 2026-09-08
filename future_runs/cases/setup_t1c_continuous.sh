@@ -48,6 +48,21 @@ echo "EXEROOT = $EX"
   || { echo "FATAL: EXEROOT is not T1b's build" >&2; exit 1; }
 echo "exe md5: $(md5sum $EX/e3sm.exe | cut -d' ' -f1)   (T1b: 799bc60960aad9b10421e70d8bea6faa)"
 mkdir -p "$RD"
+
+say "2b. case.setup -- a --keepexe clone has no .case.run and no job definitions"
+# create_clone --keepexe skips case.setup, so env_batch.xml has zero <job>
+# entries and case.submit dies with "Do not know about batch job case.run".
+# case.setup then re-renders the batch settings and strips -DCPL_BYPASS from
+# cmake_macros (guide 4, 9), so both are put back afterwards. The macro does
+# not affect THIS run -- BUILD_COMPLETE stays TRUE and T1b's exe is reused --
+# but leaving it absent would silently produce a non-CPL_BYPASS binary if
+# anyone ever rebuilds this case.
+./case.setup
+./xmlchange BUILD_COMPLETE=TRUE
+./xmlchange --id BATCH_COMMAND_FLAGS --val '--time $JOB_WALLCLOCK_TIME -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052'
+./xmlchange JOB_WALLCLOCK_TIME=02:00:00
+grep -q 'DCPL_BYPASS' cmake_macros/universal.cmake \
+  || echo 'string(APPEND CPPDEFS " -DCPL_BYPASS")' >> cmake_macros/universal.cmake
 ./preview_namelists >/dev/null 2>&1 || true
 
 say "3. three days, continuous, restart daily so the artifacts match T1b"
@@ -60,6 +75,7 @@ say "4. inputs must be byte-identical to T1b"
 diff <(grep -vE '^\s*$' user_nl_elm) <(grep -vE '^\s*$' $CLONE_FROM/user_nl_elm.leg1_snapshot 2>/dev/null || grep -vE '^\s*$' $CLONE_FROM/user_nl_elm) \
   && echo "user_nl_elm identical to T1b" || echo "^^ DIFFERS -- inspect before submitting"
 
-say "5. submit"
+say "5. preview_run must show all four Slurm flags, then submit"
+./preview_run 2>&1 | grep -A2 'SUBMIT CMD'
 cp env_run.xml env_run.xml.bak_ok
 ./case.submit
