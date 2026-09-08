@@ -29,5 +29,6 @@ $PY $T/investigate_sentinel_cells.py \
   --surfdata $P/ELM_makeSurfdata/Make_surface_data/s7_updataPdata/surfdata_UpdatedsoilP_SEUS_1_24deg_simyr1850_c260712.nc \
   --zones /projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/cpl_bypass_full/zone_mappings.txt \
   --metdir /projects/hpcl-cli185/world-shared/e3sm/inputdata/atm/datm7/Daymet_ERA5_TESSFA2/cpl_bypass_full/future_clim/ssp370 \
+  --domain $P/e3sm_run/20260712_Southeast_hires_s7P_s8hdm_ICB20TRCNPRDCTCBC/run/domain.nc \
   --json $P/ELM_Futu_landuseInput/future_runs/jobs/sentinel_cells.json
 echo "### exit $?  $(date -Is)"

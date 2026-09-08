@@ -60,6 +60,8 @@ def main():
     p.add_argument("--surfdata", required=True)
     p.add_argument("--zones", required=True)
     p.add_argument("--metdir", required=True)
+    p.add_argument("--domain", required=True,
+                   help="the case's domain.nc -- xc/yc are what the reader matches on")
     p.add_argument("--json")
     a = p.parse_args()
 
@@ -125,17 +127,34 @@ def main():
 
     # ---- nearest-neighbour match against zone_mappings ----
     print("\n== 4. what the reader matches them to ==")
+    # Match on the DOMAIN file's xc/yc, which is what ldomain%lonc/latc holds
+    # and therefore what the Fortran compares against. Using the history file's
+    # lat/lon coordinate arrays instead put 12 of the 194 on the wrong met row
+    # and produced a spurious "12 cells unexplained" (2026-09-08). It also
+    # produced a spurious uniform half-diagonal match distance and an apparent
+    # four-way tie at every cell; with xc/yc there are no ties at all.
+    dm = netCDF4.Dataset(a.domain)
+    xc = np.asarray(dm.variables["xc"][:], dtype="f8")
+    yc = np.asarray(dm.variables["yc"][:], dtype="f8")
+    dm.close()
+
     Z = np.loadtxt(a.zones)
     zlon, zlat, zzone, zgrid = Z[:, 0], Z[:, 1], Z[:, 2].astype(int), Z[:, 3].astype(int)
     print("  zone_mappings rows: %d   lon %.3f..%.3f   lat %.3f..%.3f"
           % (len(Z), zlon.min(), zlon.max(), zlat.min(), zlat.max()))
+    print("  matching on domain.nc xc/yc (NOT the history file's lat/lon)")
 
-    rows, dists = [], []
-    for glat, glon in zip(la, lo):
-        dd = (zlat - glat) ** 2 + (zlon - glon) ** 2
+    rows, dists, ties = [], [], []
+    for i, j in idx:
+        dd = (zlat - yc[i, j]) ** 2 + (zlon - xc[i, j]) ** 2
         k = int(np.argmin(dd))
         rows.append(zgrid[k])
         dists.append(float(np.sqrt(dd[k])))
+        ties.append(int((dd == dd[k]).sum()))
+    ties = np.array(ties)
+    print("  tie multiplicity: min %d median %d max %d ; cells with a tie: %d of %d"
+          % (ties.min(), int(np.median(ties)), ties.max(),
+             int((ties > 1).sum()), len(ties)))
     rows = np.array(rows)
     dists = np.array(dists)
     print("  match distance (deg): min %.5f median %.5f max %.5f"
