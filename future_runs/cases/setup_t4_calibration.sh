@@ -106,7 +106,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 cd $BASE/e3sm_cases/$CASE20 && ./case.build
 EOF
   sbatch build_t4.sbatch
-  echo "build submitted -- wait for it before creating $CASE10"
+  echo "build submitted -- model job is NOT submitted by this script"
 fi
 
 say "5. next steps (this script submits no model job)"
