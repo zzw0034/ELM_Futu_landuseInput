@@ -142,6 +142,24 @@ def main():
           % (dists.min(), np.median(dists), dists.max()))
     print("  matched met rows: %d distinct of %d cells" % (len(set(rows.tolist())), len(rows)))
 
+    # Is that distance particular to these cells, or does every cell sit the
+    # same way relative to the met grid? If it is uniform the two grids are
+    # simply offset, and the 194 are the cells where that offset happens to
+    # cross a land/ocean boundary.
+    ai, aj = np.nonzero(active)
+    sub = np.arange(0, len(ai), max(1, len(ai) // 4000))
+    dall = []
+    for i, j in zip(ai[sub], aj[sub]):
+        dd = (zlat - lat[i]) ** 2 + (zlon - lon[j]) ** 2
+        dall.append(float(np.sqrt(dd.min())))
+    dall = np.array(dall)
+    dlat = float(np.median(np.diff(np.unique(zlat))))
+    dlon = float(np.median(np.diff(np.unique(zlon))))
+    print("  met grid spacing: dlat %.6f dlon %.6f ; half-diagonal %.6f"
+          % (dlat, dlon, 0.5 * np.hypot(dlat, dlon)))
+    print("  match distance over %d sampled ACTIVE cells: min %.5f median %.5f max %.5f"
+          % (len(dall), dall.min(), np.median(dall), dall.max()))
+
     # ---- which variables are sentinel at those rows ----
     print("\n== 5. which of the seven variables are sentinel there ==")
     order = np.argsort(rows)
@@ -155,14 +173,24 @@ def main():
             continue
         ds = netCDF4.Dataset(cand[0])
         var = ds.variables[FILEVAR[v]]
-        # read record 2920 (first real 2024 record, 1-based) -> index 2920 0-based
-        vals = np.array([var[int(r) - 1, 2920] for r in rsorted])
+        # netCDF4 applies scale_factor/add_offset automatically. The sentinels
+        # are RAW packed shorts, so the comparison has to be made before that
+        # transform or it is guaranteed false -- which is exactly how an earlier
+        # version of this script reported "sentinel at 0 of 194" while the
+        # decoded samples plainly contained the decoded sentinel.
+        var.set_auto_maskandscale(False)
+        scale = float(ds.variables[FILEVAR[v]].scale_factor)
+        offset = float(ds.variables[FILEVAR[v]].add_offset)
+        vals = np.array([int(var[int(r) - 1, 2920]) for r in rsorted])
         ds.close()
         issent = vals == SENTINEL[v]
         persent[v] = issent
-        print("  %-10s sentinel at %d of %d matched rows (%.1f%%)   raw sample: %s"
-              % (v, int(issent.sum()), len(vals), 100.0 * issent.mean(),
-                 np.unique(vals)[:4].tolist()))
+        dec_sent = SENTINEL[v] * scale + offset
+        print("  %-10s sentinel(raw %7d -> decoded %12.5g) at %3d of %d rows (%5.1f%%)"
+              % (v, SENTINEL[v], dec_sent, int(issent.sum()), len(vals),
+                 100.0 * issent.mean()))
+        print("             distinct raw values at those rows: %s"
+              % np.unique(vals)[:6].tolist())
 
     if persent:
         allsent = np.ones(len(rsorted), dtype=bool)
