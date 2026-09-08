@@ -120,15 +120,19 @@ say "6. seven segments of eleven years"
 ./xmlchange DOUT_S=FALSE
 
 say "7. verification -- every check exits on failure"
-read -r RT RS CR SO SN RO RN RSB DB NT MP DS <<<"$(./xmlquery RUN_TYPE,RUN_STARTDATE,CONTINUE_RUN,STOP_OPTION,STOP_N,REST_OPTION,REST_N,RESUBMIT,DEBUG,NTASKS_LND,MAX_MPITASKS_PER_NODE,DOUT_S --value | tail -1 | tr ',' ' ')"
-for pair in "RUN_TYPE|$RT|startup" "RUN_STARTDATE|$RS|2024-01-01" "CONTINUE_RUN|$CR|FALSE" \
-            "STOP_OPTION|$SO|nyears" "STOP_N|$SN|11" "REST_OPTION|$RO|nyears" "REST_N|$RN|11" \
-            "RESUBMIT|$RSB|6" "DEBUG|$DB|FALSE" "NTASKS_LND|$NT|2560" \
-            "MAX_MPITASKS_PER_NODE|$MP|128" "DOUT_S|$DS|FALSE"; do
-  IFS='|' read -r n got want <<<"$pair"
+# One xmlquery per variable. Asking for a comma-separated list returns the
+# values in ALPHABETICAL order, not the order requested, so positional parsing
+# silently compares the wrong pairs -- it reported RUN_TYPE as 'FALSE', which is
+# CONTINUE_RUN's value.
+for pair in "RUN_TYPE|startup" "RUN_STARTDATE|2024-01-01" "CONTINUE_RUN|FALSE" \
+            "STOP_OPTION|nyears" "STOP_N|11" "REST_OPTION|nyears" "REST_N|11" \
+            "RESUBMIT|6" "DEBUG|FALSE" "NTASKS_LND|2560" \
+            "MAX_MPITASKS_PER_NODE|128" "DOUT_S|FALSE" "JOB_WALLCLOCK_TIME|04:00:00"; do
+  n=${pair%%|*}; want=${pair##*|}
+  got=$(./xmlquery "$n" --value 2>/dev/null | tail -1)
   [[ "$got" == "$want" ]] || die "$n is '$got', expected '$want'"
 done
-echo "xml settings verified"
+echo "xml settings verified (13 checks)"
 
 NSM=$(ls SourceMods/src.elm/ | grep -cv README || true)
 [[ "$NSM" -eq 0 ]] || die "$NSM SourceMods override(s) present -- production must have none"
