@@ -6,11 +6,14 @@
 # is what turns "the restart resets the phase of two forcing variables" from an
 # index observation into a number.
 #
-# T1b measured that FSDS and PRECTmms trail the other five by one record in
-# continuous integration, and that the restart initialiser gives all seven the
-# same pair, so those two are bumped forward one 3-hour record at a segment
-# boundary. What that does to the state was not measured, and "the index moved"
-# is not "the answer changed".
+# T1b HYPOTHESISED that FSDS and PRECTmms are bumped forward one 3-hour record
+# at a segment boundary, on the grounds that they trail the other five in
+# continuous integration while the restart initialiser gives all seven the same
+# pair. That hypothesis is why this case exists, and running it DISPROVED it:
+# T1b and T1c are bit-identical, and the index comparison behind the hypothesis
+# had aligned leg 1's last step against leg 2's first step, an hour apart. See
+# docs/T1C_RESULTS.md. The header is left describing the hypothesis because
+# that is what the case was built to test.
 #
 # --keepexe deliberately: the executable must not be a variable in a
 # continuous-versus-segmented comparison. It also means RUNDIR arrives pointing

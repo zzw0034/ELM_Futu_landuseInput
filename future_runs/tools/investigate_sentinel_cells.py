@@ -34,7 +34,13 @@ Read-only. Usage:
     investigate_sentinel_cells.py --h0 <T1 h0> --prod-h0 <production h0>
                                  --surfdata <surfdata.nc> --zones <zone_mappings.txt>
                                  --metdir <cpl_bypass future_clim/sspXXX>
+                                 --domain <the case's domain.nc>
                                  [--json out.json]
+
+--domain is required and is not interchangeable with the history file's
+coordinates: the reader matches on ldomain%lonc/latc, which come from
+domain.nc's xc/yc. Matching on the h0 lat/lon arrays instead put 12 of 194
+cells on the wrong met row (2026-09-08).
 """
 import argparse
 import json
@@ -165,19 +171,25 @@ def main():
     # same way relative to the met grid? If it is uniform the two grids are
     # simply offset, and the 194 are the cells where that offset happens to
     # cross a land/ocean boundary.
+    # Sampled on xc/yc as well. This block used the h0 lat/lon arrays until
+    # 2026-09-08 and therefore reported a geometry that does not exist -- a
+    # uniform half-diagonal match distance implying a four-way tie at every
+    # cell. Systematic fixed-stride sampling, not random.
     ai, aj = np.nonzero(active)
-    sub = np.arange(0, len(ai), max(1, len(ai) // 4000))
+    stride = max(1, len(ai) // 4000)
+    sub = np.arange(0, len(ai), stride)
     dall = []
     for i, j in zip(ai[sub], aj[sub]):
-        dd = (zlat - lat[i]) ** 2 + (zlon - lon[j]) ** 2
+        dd = (zlat - yc[i, j]) ** 2 + (zlon - xc[i, j]) ** 2
         dall.append(float(np.sqrt(dd.min())))
     dall = np.array(dall)
     dlat = float(np.median(np.diff(np.unique(zlat))))
     dlon = float(np.median(np.diff(np.unique(zlon))))
     print("  met grid spacing: dlat %.6f dlon %.6f ; half-diagonal %.6f"
           % (dlat, dlon, 0.5 * np.hypot(dlat, dlon)))
-    print("  match distance over %d sampled ACTIVE cells: min %.5f median %.5f max %.5f"
-          % (len(dall), dall.min(), np.median(dall), dall.max()))
+    print("  match distance over %d ACTIVE cells (systematic, stride %d, on xc/yc):"
+          % (len(dall), stride))
+    print("     min %.5f median %.5f max %.5f" % (dall.min(), np.median(dall), dall.max()))
 
     # ---- which variables are sentinel at those rows ----
     print("\n== 5. which of the seven variables are sentinel there ==")
