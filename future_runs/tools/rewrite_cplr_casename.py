@@ -33,8 +33,12 @@ if len(new) > width:
     d.close()
     sys.exit("new case name (%d chars) longer than the field (%d)" % (len(new), width))
 
+# netCDF4.stringtoarr, not list(bytes). In Python 3 list(b"ab") is [97, 98],
+# integers, and numpy renders those as the strings "97" and "98" -- which is
+# what a first attempt wrote into the field, turning the case name into a run
+# of digits. stringtoarr exists for exactly this conversion.
 padded = new.ljust(width)
-var[:] = np.array(list(padded.encode("utf-8")), dtype="S1")
+var[:] = netCDF4.stringtoarr(padded, width)
 d.close()
 
 chk = netCDF4.Dataset(path)
