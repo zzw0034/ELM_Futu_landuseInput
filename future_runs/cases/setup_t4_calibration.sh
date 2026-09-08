@@ -6,10 +6,11 @@
 # will see, the diagnostic SourceMods add log I/O per timestep, and the
 # restricted hourly history is not the output volume that has to be written.
 #
-# The two layouts share ONE executable. E3SM's PE layout is a runtime property
-# and NTASKS does not enter the build (guide 4.1), so the 10-node case clones
-# the 20-node case with --keepexe. The binary therefore cannot account for a
-# throughput or memory difference between layouts.
+# Single layout as of 2026-09-08: 20 nodes / 2560 tasks / 200g per node is the
+# production choice, so T4 validates it rather than choosing it -- whether 200g
+# holds, what the throughput is, what the I/O costs, and from those what the
+# production segment length and walltime should be. The 10-node comparison is
+# cancelled.
 #
 #   ./setup_t4_calibration.sh            # create both, build, do NOT submit
 #   SKIP_BUILD=1 ./setup_t4_calibration.sh
@@ -27,7 +28,6 @@ PROD=$BASE/e3sm_cases/20260902_Southeast_hires_s7P_s8hdmfix_harvfixsmooth_ICB20T
 HARNESS=$BASE/ELM_Futu_landuseInput/future_runs
 
 CASE20=20260908_seus_4km_fut_t4_n20
-CASE10=20260908_seus_4km_fut_t4_n10
 FLAGS='--time $JOB_WALLCLOCK_TIME -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052'
 
 say() { printf '\n=== %s ===\n' "$*"; }
@@ -109,11 +109,12 @@ EOF
   echo "build submitted -- wait for it before creating $CASE10"
 fi
 
-# ---------------------------------------------------------------- 10 nodes
-say "5. $CASE10 is created by setup_t4_n10.sh AFTER the build finishes"
+say "5. next steps (this script submits no model job)"
 cat <<EOF
-  It clones $CASE20 with --keepexe so both layouts share one binary,
-  then repoints RUNDIR, runs case.setup (a --keepexe clone has no .case.run),
-  restores BATCH_COMMAND_FLAGS / JOB_WALLCLOCK_TIME / BUILD_COMPLETE and the
-  CPL_BYPASS macro, and sets NTASKS=1280.
+  wait for the build, then:
+    cd $BASE/e3sm_cases/$CASE20
+    zgrep -l CPL_BYPASS $OUTROOT/$CASE20/bld/e3sm.bldlog.*
+    md5sum $OUTROOT/$CASE20/bld/e3sm.exe
+    ./preview_run          # SUBMIT CMD must carry all four flags
+    ./case.submit
 EOF
