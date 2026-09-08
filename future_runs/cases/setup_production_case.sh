@@ -130,7 +130,14 @@ for pair in "RUN_TYPE|startup" "RUN_STARTDATE|2024-01-01" "CONTINUE_RUN|FALSE" \
             "MAX_MPITASKS_PER_NODE|128" "DOUT_S|FALSE" "JOB_WALLCLOCK_TIME|04:00:00"; do
   n=${pair%%|*}; want=${pair##*|}
   got=$(./xmlquery "$n" --value 2>/dev/null | tail -1)
-  [[ "$got" == "$want" ]] || die "$n is '$got', expected '$want'"
+  # Some variables are per-job-group -- JOB_WALLCLOCK_TIME exists separately for
+  # case.run, case.st_archive and case.post_run_io, so xmlquery returns
+  # "04:00:00,04:00:00,04:00:00". Accept that only when EVERY field matches;
+  # a mismatch in any one of them still fails.
+  ok=1
+  IFS=',' read -ra parts <<<"$got"
+  for f in "${parts[@]}"; do [[ "$f" == "$want" ]] || ok=0; done
+  [[ ${#parts[@]} -ge 1 && $ok -eq 1 ]] || die "$n is '$got', expected '$want' (all fields)"
 done
 echo "xml settings verified (13 checks)"
 
