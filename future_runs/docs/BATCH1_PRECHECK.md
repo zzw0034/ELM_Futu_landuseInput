@@ -1,6 +1,7 @@
-# 第一批 3 个正式 case —— 预检记录
+# 七个正式 case —— 预检记录
 
-**状态：已创建并通过全部预检，未提交任何作业。等最终确认。**
+**批 1（ssp119 / ssp245 / ssp370）已于 2026-09-08 提交并运行中。**
+**批 2（ssp585 / RF / DF）与批 3（RH）已创建并通过全部预检，未提交。**
 
 批次划分（主结果优先，可改）：
 
@@ -86,3 +87,55 @@ stream_fldfilename_ndep
 
 三个 case 各自 `./case.submit`，`RESUBMIT=6` 会自动接续后 6 段。
 并发 3 个 × 20 节点 = **60 节点**。单 run 约 17.05 h 积分加段间排队。
+
+
+---
+
+# 批 2 与批 3（2026-09-08 创建，未提交）
+
+| 批 | 情景 | CASEROOT | 状态 |
+|---|---|---|---|
+| 2 | ssp585 | `…_fut_ssp585` | 已建，预检通过，未提交 |
+| 2 | RF | `…_fut_ssp370_RF` | 同上 |
+| 2 | DF | `…_fut_ssp370_DF` | 同上 |
+| 3 | RH | `…_fut_ssp370_RH` | 同上 |
+
+四者与批 1 走同一个 `setup_production_case.sh`，通过同样的全部检查，
+并新增 **`PIO_TYPENAME` 检查**：四个 case 均报告 "all 10 components netcdf"。
+
+## 七个 case 的交叉核对
+
+**RF / DF / RH 相对 ssp370，`lnd_in` 只差一个字段**：
+
+```
+flanduse_timeseries
+```
+
+气象、CO2、Ndep 三项与 ssp370 逐字节相同——这正是管理情景的设计：
+只改土地利用轨迹，其余不动。
+
+**ssp585 相对 ssp370** 差预期的四项：`co2_file`、`flanduse_timeseries`、
+`metdata_bypass`、`stream_fldfilename_ndep`。
+
+**七个 landuse 各不相同**，RF 是情景无关的那一份：
+
+| case | landuse |
+|---|---|
+| ssp119 | `…nlcd2elm_SSP1_RCP19_simyr2024-2100.nc` |
+| ssp245 | `…nlcd2elm_SSP2_RCP45_…` |
+| ssp370 | `…nlcd2elm_SSP3_RCP70_…` |
+| ssp585 | `…nlcd2elm_SSP5_RCP85_…` |
+| RF | `…nlcd2elm_RF_…`（情景无关） |
+| DF | `…nlcd2elm_SSP3_RCP70_DF_…` |
+| RH | `…nlcd2elm_SSP3_RCP70_RH_…` |
+
+**七个 case 的分段与 PE 设置完全一致**：
+`STOP_N=11`、`REST_N=11`、`RESUBMIT=6`、`NTASKS_LND=2560`。
+
+## 存储前提
+
+批 2/3 的提交时机取决于 `/scratch` 余量。2026-09-08 删除
+`/scratch/.../future_clim` 冗余副本（2.7 TiB）后，项目用量从 191.2 TiB
+回落到约 188.5 TiB，软限 200 TiB 以内余量约 11.4 TiB，
+七个情景所需 10.6 TiB 可完全容纳。**提交批 2 前应重新核对当时的实际余量**，
+因为 `/scratch` 是全项目共享的。
