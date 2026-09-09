@@ -30,6 +30,7 @@ tools/mem_probe.sh           分类内存采样（anon / file / slab / peak / oo
 sourcemods/make_diag_sourcemod.py   生成 forcing 诊断 SourceMods，锚点不匹配即拒写
 jobs/                        Slurm 作业脚本
 docs/                        测试记录
+docs/PRODUCTION_STATUS.md    七个正式 run 的执行记录（提交之后）
 ```
 
 ## 已确立的事实（截至 2026-09-05）

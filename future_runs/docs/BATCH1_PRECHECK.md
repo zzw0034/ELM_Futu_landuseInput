@@ -1,7 +1,8 @@
 # 七个正式 case —— 预检记录
 
-**批 1（ssp119 / ssp245 / ssp370）已于 2026-09-08 提交并运行中。**
-**批 2（ssp585 / RF / DF）与批 3（RH）已创建并通过全部预检，未提交。**
+**三批已全部提交：批 1 于 2026-09-08，批 2 与批 3 于 2026-09-09。**
+本文件记录的是**提交之前**的预检；提交之后的执行情况见
+[`PRODUCTION_STATUS.md`](PRODUCTION_STATUS.md)。
 
 批次划分（主结果优先，可改）：
 
@@ -83,22 +84,27 @@ stream_fldfilename_ndep
 
 两次的半成品 case 都已删除后重建（均无运行输出）。
 
-## 提交方式（待确认后执行）
+## 提交方式（已执行）
 
 三个 case 各自 `./case.submit`，`RESUBMIT=6` 会自动接续后 6 段。
 并发 3 个 × 20 节点 = **60 节点**。单 run 约 17.05 h 积分加段间排队。
+实测积分 14.2–15.7 h，含排队的墙上时间 16.9–19.4 h，见
+[`PRODUCTION_STATUS.md`](PRODUCTION_STATUS.md)。
 
 
 ---
 
-# 批 2 与批 3（2026-09-08 创建，未提交）
+# 批 2 与批 3（2026-09-08 创建，2026-09-09 提交）
 
-| 批 | 情景 | CASEROOT | 状态 |
+| 批 | 情景 | CASEROOT | 首段作业 |
 |---|---|---|---|
-| 2 | ssp585 | `…_fut_ssp585` | 已建，预检通过，未提交 |
-| 2 | RF | `…_fut_ssp370_RF` | 同上 |
-| 2 | DF | `…_fut_ssp370_DF` | 同上 |
-| 3 | RH | `…_fut_ssp370_RH` | 同上 |
+| 2 | ssp585 | `…_fut_ssp585` | 522045 |
+| 2 | RF | `…_fut_ssp370_RF` | 522046 |
+| 2 | DF | `…_fut_ssp370_DF` | 522047 |
+| 3 | RH | `…_fut_ssp370_RH` | 522138 |
+
+提交前重跑了与批 1 相同的全套检查：输入文件存在、气象目录 7 个变量文件、
+exe md5、12 项 xml、无历史提交记录、`sbatch --test-only`。
 
 四者与批 1 走同一个 `setup_production_case.sh`，通过同样的全部检查，
 并新增 **`PIO_TYPENAME` 检查**：四个 case 均报告 "all 10 components netcdf"。
@@ -139,3 +145,7 @@ flanduse_timeseries
 回落到约 188.5 TiB，软限 200 TiB 以内余量约 11.4 TiB，
 七个情景所需 10.6 TiB 可完全容纳。**提交批 2 前应重新核对当时的实际余量**，
 因为 `/scratch` 是全项目共享的。
+
+2026-09-09 提交批 2 前复核：用量已升到 194.3 TiB，软限内余量仅 5.7 TiB，
+不足以同时容纳批 2 与批 3。删除 5.1 TiB 的旧 run 目录后回落到 191.7 TiB，
+批 3 随即提交。详见 [`PRODUCTION_STATUS.md`](PRODUCTION_STATUS.md) 的存储一节。
