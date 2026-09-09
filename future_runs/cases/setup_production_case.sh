@@ -25,7 +25,16 @@ EXPECT_MD5=e8b487b04a27adfd8f683359dfd73df5
 A3=$OUTROOT/20260902_Southeast_hires_s7P_s8hdmfix_harvfixsmooth_ICB20TRCNPRDCTCBC/run/20260902_Southeast_hires_s7P_s8hdmfix_harvfixsmooth_ICB20TRCNPRDCTCBC.elm.r.2024-01-01-00000.nc
 A3_SHA=20e9c29b13b519ef6085b11167cf0e4eaa02e21d65ce8d55923ef6fbf16f12ad
 LUD=$BASE/ELM_Futu_landuseInput/outputs/processed
-FLAGS='--time $JOB_WALLCLOCK_TIME -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052'
+# -J gives the job a short, distinctive name. CIME generates
+# "#SBATCH --job-name=run.<CASE>" inside .case.run, and every case here shares a
+# 26-character prefix, so squeue truncates them all to the same string and the
+# seven chains are indistinguishable at a glance -- worst for RF/DF/RH, which
+# would all show as "run.20260908_seus_4km_fut_ssp370_". An sbatch command-line
+# option beats the in-script directive, and BATCH_COMMAND_FLAGS is already on
+# the command line, so this needs no edit to .case.run (which case.setup
+# regenerates anyway).
+JOBNAME=f4k_${SC}
+FLAGS="--time \$JOB_WALLCLOCK_TIME -p parallel -A hpcl-cli185 -q hpcl-cli185 --mem=200g --constraint=BL --exclude=blc051,blc052 -J $JOBNAME"
 
 # scenario -> landuse, met dir, co2, ndep
 case "$SC" in
