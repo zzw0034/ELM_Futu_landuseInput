@@ -119,7 +119,7 @@ release 构建同样 ENDRUN。
 `default_pft = np.array(ds["PCT_NAT_PFT"][:])` 直接从 Default 成品里读，
 把缺陷一起继承了。
 
-## 修复方案（未执行）
+## 修复方案（已执行，见下方"解决状态"）
 
 改两行，`02_harmonize_seus.py`：
 
@@ -137,14 +137,57 @@ RF 三者都是 float64 路径，实测偏差 6.66e-16，比 ELM 的 1e-14 低�
 
 同时应该修的（否则下次还是拦不住）：
 
-1. `02_harmonize_seus.py:508` 的打印改成对着 `1e-14` 的**断言**，不是 `:.4f` 打印。
-2. `build_harvest_scenarios.py:187` 的 `1e-3` 收紧到 ELM 判据。
-3. `FUTURE_LANDUSE_TIMESERIES.md` §6 的验证表重记（当前那个 `0.0000` 是假通过）。
+1. ~~`02_harmonize_seus.py:508` 的打印改成对着 `1e-14` 的**断言**，不是 `:.4f` 打印。~~
+   **已修**，commit `9de4236`（2026-09-05 08:31），同一提交里一起做的。
+2. ~~`build_harvest_scenarios.py:187` 的 `1e-3` 收紧到 ELM 判据。~~
+   **已修**，同一提交 `9de4236`：`err.max() > 1e-3` 改成了 `> 1e-12`
+   （对应 ELM `eps=1e-14` 在百分数单位下的等价阈值），现在超标会直接
+   `raise ValueError` 拒绝写出，不会再让坏文件蒙混过关。
+3. `FUTURE_LANDUSE_TIMESERIES.md` §6 的验证表重记（当前那个 `0.0000` 是假通过）——
+   **仍未做**，如果之后要引用那张表，先重新measure再填。
 
-## 重建范围
+## 重建范围（原计划）
 
 需要重跑 `02_harmonize_seus.py --build-timeseries` 的 4 个 SSP（array job，
 4 个 task 并行，每个 40 分钟内），然后由它们派生的 DF、RH 重建；
 **RF 不需要动**。合计 6 个文件。
 
-按指示，定位与方案到此为止，未修改脚本、未重做任何数据。
+按指示，定位与方案到此为止，未修改脚本、未重做任何数据。（此段是
+2026-09-05 诊断时的原始记录，保留存档——实际重建范围比这里写的更窄，
+见下方"解决状态"。）
+
+## 解决状态
+
+**2026-09-05**：代码修复（`02_harmonize_seus.py` float64 + 两处 QA 门槛收紧，
+commits `d94ddb0`/`0ce5c85`/`9de4236`）当天完成，同时重建了 4 个 SSP 的
+Default 文件（`landuse.timeseries_SEUS_1_24deg_nlcd2elm_{SSP1_RCP19,
+SSP2_RCP45,SSP3_RCP70,SSP5_RCP85}_simyr2024-2100.nc`，全部 mtime 09-05
+08:34）。但**只有 `SSP3_RCP70` 的 DF/RH 衍生文件被一并重建**（09-05
+08:36/08:37，因为当时"七个正式 run"只用得到 SSP3_RCP70 的 DF/RH，见
+`PRODUCTION_STATUS.md`）；`SSP1_RCP19`/`SSP2_RCP45`/`SSP5_RCP85` 的 DF、RH
+六个文件停留在 08-19/08-28 的旧版本，未被纳入当时的重建范围。
+
+**2026-09-19**：这个遗漏在 `20260915_seus_4km_fut_{ssp119,ssp245,ssp585}_{DF,RH}`
+六个新增敏感性 case（不在原七个正式 run 之列）上被踩中——全部在初始化阶段
+以完全相同的签名 ENDRUN（`sum of PCT_NAT_PFT not 1.0 at nl=... and t=1`）。
+`ssp245_DF` 首次提交（job 540582）还额外撞上一个无关的 `.git/index.lock`
+竞争（`e3sm_cases` 目录被并发 session 同时操作），在到达 PCT_NAT_PFT 检查
+之前就已失败；该锁后来已消失，不影响本次修复。
+
+**2026-09-20/21**：
+1. 用 `harvest_scenarios/jobs/submit_harvest_scenarios.sbatch --array=0,1,3`
+   （job 549462，跳过已修好的 index 2/`SSP3_RCP70`）重建了 6 个文件：
+   `{SSP1_RCP19,SSP2_RCP45,SSP5_RCP85}_{DF,RH}`。3 个 array task 全部
+   `COMPLETED 0:0`，脚本内建的 `1e-12` 完整性门槛全部通过（顺带以同一次
+   提交重写了共享的 RF 文件——RF 与 Default 无关、构建路径本就是
+   float64，重写前后应为等价结果，未见异常）。
+2. 独立用 ELM 的真实判据 `eps=1e-14` 复核了 `SSP5_RCP85_RH`：偏差从旧文件
+   的 `5.552647e-08`（76,367 个活跃陆地格点超标，99.93%）降到新文件的
+   `6.661338e-16`（0 个超标），与历史文件/0.5°聚合/RF 的"干净"基准完全同量级。
+3. 重新提交 6 个 case（job 549473/549474/549476/549477/549479/549481），
+   全部越过初始化阶段（此前平均在 2 分钟内 ENDRUN），首段（11 年）全部
+   `COMPLETED 0:0`，`RESUBMIT=6` 自动续投链条已接管，持续正常产出 h0。
+   **截至 2026-09-21 09:39，6 个 case 均未跑完**（各自进度 46-55/77 年，
+   仍在自动续投中，尚无 2101-01-01 收尾 restart）——本节记录的是"初始化
+   bug 已修复、run 正常推进"，不是"run 已完成"，完成状态请在推进后
+   重新核对 h0 文件数与收尾 restart。
